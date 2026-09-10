@@ -1,0 +1,13 @@
+{
+  "id": "institution",
+  "name": "Approved institution access",
+  "principal_id": "operator",
+  "persist_session": true,
+  "max_browser_sessions": 4,
+  "api_interval": 1,
+  "sources": {
+    "scopus": {"api_key_ref": "institution/scopus"},
+    "wos": {"api_key_ref": "institution/wos"},
+    "unpaywall": {"email_ref": "institution/contact-email"}
+  }
+}

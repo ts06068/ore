@@ -1,0 +1,8 @@
+{
+  "image": "sha256:c7e7111a9a6954cefd7ea8212d6dbb13984df7a6d412fc24dc5212f0f77c036c",
+  "compose_health": "passed",
+  "postgres_job_persistence_after_restart": "passed",
+  "job_id": "273f935b-e0dd-44cd-bc7f-48d379891d5b",
+  "job_status": "draft",
+  "model_turns": 0
+}

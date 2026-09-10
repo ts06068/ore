@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ore-engine"
+version = "0.1.0"
+description = "Protocol-driven retrieval with LLM agents, durable evidence, and remote browser control"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.11,<3", "pydantic-settings>=2.9,<3", "httpx>=0.28,<1",
+  "typer>=0.16,<1", "rich>=14,<15", "fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1",
+  "sqlalchemy>=2.0.40,<3", "psycopg[binary]>=3.2,<4", "alembic>=1.15,<2",
+  "playwright==1.62.0", "pyyaml>=6,<7", "pypdf>=5,<7", "beautifulsoup4>=4.13,<5",
+  "cryptography>=44,<49", "boto3>=1.38,<2", "python-multipart>=0.0.20,<1",
+  "websockets>=15,<17"
+]
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.26,<2", "build>=1.2,<2", "ruff>=0.11,<1"]
+ocr = ["pytesseract>=0.3.13,<1", "pillow>=11,<13"]
+scholarly = ["ore-scholarly>=0.1.0,<0.2"]
+[project.scripts]
+ore = "ore.cli:app"
+[tool.hatch.build.targets.wheel]
+packages = ["src/ore"]
+[tool.hatch.build.hooks.custom]
+path = "scripts/hatch_build.py"
+[tool.hatch.build.targets.sdist]
+include = ["/src/ore", "/pyproject.toml", "/README.md", "/scripts/hatch_build.py", "/examples", "/docs", "/ARCHITECTURE.md", "/VALIDATION.md", "/scripts/clarivate_institution_application.py", "/scripts/clarivate_institution_subscribe.py"]
+[tool.uv.workspace]
+members = ["packages/ore-scholarly"]
+[tool.uv.sources]
+ore-scholarly = { workspace = true }
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["live: requires live Codex or source credentials", "browser: requires installed Chromium"]
+[tool.ruff]
+line-length = 120
+target-version = "py312"

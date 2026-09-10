@@ -1,0 +1,23 @@
+name: JACC original research archive
+goal: Build the official JACC main-journal volume and issue inventory for the specified period. Classify original primary research using publisher labels and study design. Retrieve each included published main PDF and every supplementary object in its original format. Reconcile official TOC counts, record all access gaps, and preserve exact provenance. Reviews, editorials and other JACC journals are excluded.
+rune_id: journal.jacc
+publication_window:
+  basis: issue_date
+  from: '2006-01-01'
+  until_exclusive: '2026-01-01'
+sources: [pubmed, crossref]
+journals: [Journal of the American College of Cardiology]
+completeness: inventory
+artifact_roles: [main_pdf, supplement]
+access_profile_ref: institution
+scope:
+  article_versions: [published]
+routing: {mode: auto}
+budget:
+  max_turns: 100
+  max_seconds: 3600
+  max_agent_workers: 4
+  max_bytes: 1000000000
+on_challenge:
+  max_attempts_per_episode: 3
+  max_active_seconds: 120

@@ -1,0 +1,149 @@
+{
+  "schema_version": "ore.rune/v0",
+  "protocol_version": "0.1.0",
+  "inputs": {
+    "publication_window": {
+      "basis": "issue_date",
+      "from": "2006-01-01",
+      "until_exclusive": "2026-01-01"
+    },
+    "article_scope": "primary_original_research",
+    "archive_url": "https://academic.oup.com/eurheartj/issue-archive"
+  },
+  "instructions": "Build the issue inventory from the official archive. Reconcile each issue table of contents with database metadata. Use the publisher article type and abstract to classify primary original research; mark ambiguous types needs_review. Locate the main published PDF and every declared supplementary object. Preserve each format, file identity, license, source, version and parent relationship. Record missing, inaccessible and uninspected items separately. If the site differs from this context, inspect its current page and revise the plan without weakening the contract. Never infer complete coverage from a search-result count.",
+  "agent": {
+    "controller": "llm",
+    "model_selection": "runtime_config",
+    "planning": "adaptive_with_contract",
+    "tools": [
+      "inventory",
+      "api",
+      "http",
+      "browser",
+      "computer",
+      "artifact",
+      "delegate"
+    ]
+  },
+  "access_profile_ref": "local:approved-journal-access",
+  "scope": {
+    "origins": [
+      "https://academic.oup.com"
+    ],
+    "asset_origins": [],
+    "article_versions": [
+      "published"
+    ],
+    "artifact_roles": [
+      "main_pdf",
+      "supplement"
+    ]
+  },
+  "milestones": [
+    {
+      "id": "inventory",
+      "requires": [],
+      "evidence": "collection_and_resource_inventory"
+    },
+    {
+      "id": "classify",
+      "requires": [
+        "inventory"
+      ],
+      "evidence": "eligibility_with_source_label"
+    },
+    {
+      "id": "collect",
+      "requires": [
+        "classify"
+      ],
+      "evidence": "main_and_supplement_observations"
+    },
+    {
+      "id": "audit",
+      "requires": [
+        "collect"
+      ],
+      "evidence": "verified_artifacts_and_unresolved_items"
+    }
+  ],
+  "checks": [
+    "inventory_reconciled_with_official_toc",
+    "included_resources_have_main_pdf_status",
+    "included_resources_have_supplement_discovery_status",
+    "article_version_and_license_recorded"
+  ],
+  "limits": {
+    "max_agent_workers": 4,
+    "publisher_group_concurrency": 1,
+    "origin_min_interval_seconds": 3,
+    "transient_retries": 3,
+    "agent_actions_per_resource": 30,
+    "agent_seconds_per_resource": 300,
+    "job_budget_ref": "local:research-pilot-budget"
+  },
+  "on_challenge": {
+    "mode": "bounded_attempt_then_handoff",
+    "max_attempts_per_episode": 3,
+    "max_active_seconds": 120,
+    "budget_scope": "origin_and_auth_context",
+    "counter_storage": "orbit",
+    "on_exhausted": "awaiting_user",
+    "handoff": "same_browser_session"
+  },
+  "on_access_denied": "record_access_required",
+  "verification": {
+    "live_verified": false,
+    "selector_validation": "agent_observation_required",
+    "status": "context_pack_not_live_execution_evidence"
+  },
+  "protocol_id": "journal.ehj",
+  "context": {
+    "journal_title": "European Heart Journal",
+    "issns": [
+      "0195-668X",
+      "1522-9645"
+    ],
+    "first_publication_year": 1980,
+    "title_scope": "main_journal_only",
+    "publisher_section_labels": [
+      "Clinical Research",
+      "Translational Research",
+      "Basic Science"
+    ],
+    "article_type_map": {
+      "Clinical Research": "candidate_original_research",
+      "Translational Research": "candidate_original_research",
+      "Basic Science": "candidate_original_research"
+    },
+    "ambiguous_type": "needs_review",
+    "excluded_study_types": [
+      "systematic_review",
+      "meta_analysis",
+      "editorial",
+      "narrative_review"
+    ],
+    "notes": "European Heart Journal main journal only. European Heart Journal Supplements and the EHJ family are distinct titles. Clinical Research can include reviews/meta-analysis: examine the article.",
+    "sources": [
+      "pubmed",
+      "crossref"
+    ],
+    "resolvers": [
+      "unpaywall",
+      "pmc"
+    ],
+    "artifact_discovery": {
+      "main": [
+        "citation_pdf_url",
+        "publisher PDF action"
+      ],
+      "supplement": [
+        "publisher supplementary/supporting-information section",
+        "JATS supplementary-material links"
+      ],
+      "unlisted_media": "media_unknown; do not relabel all images as supplements"
+    },
+    "completion_boundary": "Publisher TOC reconciliation plus individual artifact observations; empty browser section alone is not proof of absence.",
+    "asset_origin_policy": "Discover asset origins from observed links and authorize through the mission scope before retrieval; no blanket CDN wildcard."
+  }
+}

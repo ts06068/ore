@@ -1,0 +1,11 @@
+name: Extract an exact paragraph
+goal: Open the supplied URL, register the page as an included resource, and save the exact text of its h1 as an excerpt artifact using page_extract.
+urls:
+  - https://example.com
+artifact_roles: [excerpt]
+routing: {mode: auto}
+budget:
+  max_turns: 12
+  max_seconds: 300
+  max_agent_workers: 1
+external_model_content: selected_page_content

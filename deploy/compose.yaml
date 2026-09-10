@@ -1,0 +1,50 @@
+name: ore
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ore
+      POSTGRES_USER: ore
+      POSTGRES_PASSWORD: ${ORE_POSTGRES_PASSWORD:?Set ORE_POSTGRES_PASSWORD in the deployment environment}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ore -d ore"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [ore-backend]
+  coordinator:
+    image: ore-engine:0.1.0
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      ORE_AUTH_TOKEN: ${ORE_AUTH_TOKEN:?Set ORE_AUTH_TOKEN in the deployment environment}
+      ORE_DATABASE_URL: postgresql+psycopg://ore:${ORE_POSTGRES_PASSWORD:?Set ORE_POSTGRES_PASSWORD}@postgres:5432/ore
+      ORE_STATE_DIR: /var/lib/ore
+      ORE_WEB_DIR: /app/web/dist
+      ORE_MAX_WORKERS: "0"
+      ORE_BROWSER_HEADLESS: "true"
+    ports:
+      - "127.0.0.1:${ORE_PORT:-8765}:8765"
+    volumes:
+      - ore-state:/var/lib/ore
+    shm_size: 1gb
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ore-backend]
+networks:
+  ore-backend:
+volumes:
+  postgres-data:
+  ore-state:

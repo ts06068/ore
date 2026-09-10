@@ -1,0 +1,11 @@
+name: Multi-source cardiology search
+goal: Search the configured sources for the query and dates. Keep each exact source query and cursor, deduplicate by DOI, classify primary original research and save abstracts plus main PDFs and all discovered supplements. Report source-specific failures and unknown global recall. Do not treat an inaccessible database as an empty result.
+query: atrial fibrillation
+sources: [pubmed, crossref, wos, scopus]
+publication_window:
+  from: '2024-01-01'
+  until_exclusive: '2026-01-01'
+artifact_roles: [main_pdf, supplement]
+access_profile_ref: institution
+routing: {mode: auto}
+budget: {max_turns: 60, max_seconds: 1800, max_agent_workers: 3}

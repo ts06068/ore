@@ -1,0 +1,18 @@
+{
+  "passed": [
+    "operator_login",
+    "cookie_session_restore",
+    "mission_create_as_draft_and_audit_display",
+    "explicit_run_and_pause_without_model_workers",
+    "rune_validate_save",
+    "authenticated_websocket_frame_and_scaled_input",
+    "mobile_layout"
+  ],
+  "page_errors": [],
+  "model_turns": 0,
+  "frontend_assets": [
+    "index-DYOyT6D8.js",
+    "index-DZpTW_lg.css"
+  ],
+  "backend_image": "sha256:c7e7111a9a6954cefd7ea8212d6dbb13984df7a6d412fc24dc5212f0f77c036c"
+}
