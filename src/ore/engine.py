@@ -262,6 +262,9 @@ class Engine:
     async def run(self,job_id):
         existing=self.store.get_job(job_id)
         if existing is None:raise KeyError('Unknown job')
+        context = self.handoffs.conversation_context(job_id)
+        if context and context.get('phase') == 'planning':
+            raise AccessDenied('A planning reconnaissance job cannot start collection; continue through its conversation plan')
         if existing.get('workflow_run_id'):
             return await self.workflows.resume(existing['workflow_run_id'])
         if existing['status']=='completed':return existing

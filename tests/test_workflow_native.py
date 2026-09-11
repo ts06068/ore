@@ -588,3 +588,73 @@ async def test_quiescent_failed_native_work_does_not_spend_idle_time(native_engi
     elapsed = result['usage']['elapsed_seconds']
     await asyncio.sleep(.02)
     assert engine.workflows.get_run(run['id'])['usage']['elapsed_seconds'] == elapsed
+
+
+@pytest.mark.parametrize('through_recipe', [False, True])
+async def test_fetch_403_preserves_receipt_and_continues_native_fallback(native_engine, monkeypatch, through_recipe):
+    """Exercise ToolRuntime HTTP parsing, durable receipt, native routing and finish."""
+    import httpx
+    from ore.policy import RateLimiter
+    engine = native_engine
+    engine.settings.browser_proxy = None
+    engine.limiter = RateLimiter()
+    engine.profile = lambda mission: {'id': 'public', 'allow_private_network': True}
+    requests = []
+    def respond(request):
+        requests.append(str(request.url))
+        if request.url.path == '/publisher':
+            return httpx.Response(403, text='Access verification required')
+        return httpx.Response(200, text='<html><body>Verified public source content</body></html>')
+    monkeypatch.setattr(httpx, 'AsyncHTTPTransport', lambda **kwargs: httpx.MockTransport(respond))
+    async def fetch(args, runtime):
+        return await runtime.execute('fetch', args)
+    engine.capabilities.handlers['fetch'] = fetch
+    async def script(session, prompt):
+        if through_recipe:
+            failed = await session.call('recipe.execute', {'inputs': {}, 'program': {'version': 1,
+                'steps': [{'id': 'source', 'tool': 'fetch', 'inputs': {'url': 'http://127.0.0.1/publisher'}}]}})
+        else:
+            failed = await session.call('fetch', {'url': 'http://127.0.0.1/publisher'})
+        assert failed['status'] == 403 and failed['error']
+        assert failed['recoverable'] and failed['fallback_allowed']
+        assert failed['workflow_status'] == 'running' and session.yield_reason is None
+        success = await session.call('fetch', {'url': 'http://127.0.0.1/public-copy'})
+        assert success['status'] == 200 and success['text'] == 'Verified public source content'
+        await session.call('workflow.finish', {'output': {'done': True}})
+    engine.backend.script = script
+    run = engine.workflows.create_run(plan([agent(completion={'required_tools': [{'tool': 'fetch',
+        'min_count': 1, 'checks': [{'op': 'eq', 'left': {'$ref': 'output.status'}, 'right': 200}]}]})],
+        mission={'allowed_origins': ['http://127.0.0.1'], 'limits': {'origin_min_interval_seconds': 0}}))
+    await engine.workflows.start_run(run['id'])
+    result = await drain(engine, run)
+    assert result['status'] == 'completed'
+    assert len(engine.backend.sessions) == 1 and result['plan_revision'] == 1
+    assert requests == ['http://127.0.0.1/publisher', 'http://127.0.0.1/public-copy']
+    receipts = engine.store.list_documents('workflow.operation', run['job_id'])
+    assert len(receipts) == 2 and all(row['status'] == 'completed' for row in receipts)
+    assert sorted(row['output']['status'] for row in receipts) == [200, 403]
+    failures = [row for row in receipts if row['output']['status'] == 403]
+    assert failures[0]['output']['error'] and 'workflow_status' not in failures[0]['output']
+
+
+@pytest.mark.parametrize('failure,expected', [
+    ({'error': True, 'code': 'http_error', 'status': 401, 'recoverable': True, 'fallback_allowed': True}, 'awaiting_auth'),
+    ({'error': True, 'code': 'http_error', 'status': 403, 'recoverable': True, 'fallback_allowed': False}, 'awaiting_auth'),
+    ({'error': True, 'code': 'credential_missing', 'status': 403, 'recoverable': True, 'fallback_allowed': True}, 'awaiting_auth'),
+    ({'error': True, 'code': 'http_error', 'status': 403, 'recoverable': True, 'fallback_allowed': True, 'allowed': False}, 'awaiting_auth'),
+    ({'error': True, 'code': 'http_error', 'status': 403, 'recoverable': True, 'fallback_allowed': True, 'needs_user': True}, 'awaiting_user'),
+])
+async def test_http_fallback_does_not_bypass_explicit_gates(native_engine, failure, expected):
+    engine = native_engine
+    async def blocked(args, runtime): return failure
+    engine.capabilities.handlers['blocked_access'] = blocked
+    async def script(session, prompt):
+        result = await session.call('blocked_access', {})
+        assert result['workflow_status'] == expected
+        assert session.yield_reason == expected
+        assert (await session.call('echo', {'value': 'must not execute'}))['code'] == 'agent_yielding'
+    engine.backend.script = script
+    run = engine.workflows.create_run(plan([agent()]))
+    await engine.workflows.start_run(run['id'])
+    assert (await drain(engine, run))['status'] == expected
+    assert [name for name, _ in engine.capabilities.calls] == ['blocked_access']

@@ -19,7 +19,7 @@ from .source_policy import require_operation, source_for_url, operation_for_url,
 
 TOOLS = {
  'state': 'Read current job, resource/artifact manifest, and child task states. Arguments: {}.',
- 'browser_open': 'Create a dedicated browser. Arguments: {url?:str}. Returns session_id, screenshot and available text; desktop_chrome has OCR, no DOM.',
+ 'browser_open': 'Create a task-owned browser. Arguments: {url?:str,transport?:desktop_chrome|playwright}. Omit transport for the profile default. desktop_chrome opens ordinary Chrome using screenshot/OS input within the admitted checkpoint scope; it has OCR, no DOM. Required profile/companion transport rules remain binding. A planning browser belongs to a different job and cannot be reused here.',
  'browser_observe': 'Observe browser screenshot and available text; desktop_chrome has OCR, no DOM. Arguments: {session_id:str}.',
  'browser_action': 'Operate browser. Arguments: {session_id:str,epoch:int,action:navigate|click|type|key|scroll|wait|tab|back,url?:str,target?:integer,selector?:str,x?:number,y?:number,text?:str,key?:str,deltaY?:number,index?:integer}. Use target indices from latest observation.',
  'provider_form': 'Inspect or prepare provider setup forms. Only provider_setup workflows. Pass operation inspect with session_id and epoch; then use observed url+form_fingerprint for fill (fields:[{target,value_ref}]), propose_fill, propose_click(target) or capture_key(target). Values are stored host-side; never put credentials or identity values in tool arguments. Clicks and key capture require review in the connection card.',
@@ -139,6 +139,19 @@ class ToolRuntime:
         if isinstance(result,dict): self.last_image=result.pop('image_url',None)
         self.engine.event(self.job_id,'tool_completed',{'tool':name,'result':redact(result)})
         return result
+    async def _browser_session(self, session_id):
+        session = self.engine.browser.get(session_id)
+        if session.job_id != self.job_id:
+            raise AccessDenied('Browser belongs to another job')
+        if self.job()['mission'].get('operator_access', {}).get('purpose') == 'provider_setup' and getattr(self.engine, 'provider_enrollment', None):
+            await self.engine.provider_enrollment.rebind(self, session)
+        elif self.actor_id and session.agent_id != self.actor_id:
+            from .browser_resume import rebind_workflow_browser
+            await rebind_workflow_browser(self, session)
+        if self.actor_id and session.agent_id != self.actor_id:
+            raise AccessDenied('Browser belongs to another agent task')
+        return session
+
     def coverage_state(self):
         e=self.engine;job=self.job()
         if job['mission'].get('completeness') not in ('inventory','systematic'):return None
@@ -209,6 +222,11 @@ class ToolRuntime:
                 for session in getattr(e.browser, 'sessions', {}).values():
                     if not session.closed and session.job_id == self.job_id:
                         await e.provider_enrollment.rebind(self, session)
+            elif self.task and self.task.get('kind') == 'workflow':
+                from .browser_resume import rebind_workflow_browser
+                for session in getattr(e.browser, 'sessions', {}).values():
+                    if not session.closed and session.job_id == self.job_id:
+                        await rebind_workflow_browser(self, session, strict=False)
             if e.execution.enabled:
                 browsers=await e.execution.task_sessions(self.job_id,self.task['id'] if self.task else None)
             else:
@@ -226,15 +244,33 @@ class ToolRuntime:
                 manager = e.provider_enrollment = ProviderEnrollment(e)
             return await manager.tool(self, args)
         if name=='browser_open':
-            session=await e.browser.create(self.job_id,mission,profile,agent_id=self.actor_id)
-            if args.get('url'):return await e.browser.action(session.id,'navigate',args,owner_id=self.actor_id)
+            transport = args.get('transport')
+            selected_mission, selected_profile = mission, profile
+            native_binding = None
+            if transport:
+                companion = getattr(e.browser, 'companion_hub', None)
+                if profile.get('require_companion') or (companion and (companion.selected(self.job_id) or companion.available(self.job_id))):
+                    raise AccessDenied('This mission requires its Chrome companion; another browser transport cannot replace it')
+                if profile.get('require_desktop') and transport != 'desktop_chrome':
+                    raise AccessDenied('The access profile requires the native Chrome desktop')
+                if transport == 'desktop_chrome':
+                    from .native_scope import native_browser_scope
+                    selected_mission, selected_profile = await native_browser_scope(mission, profile, args.get('url'))
+                    from .handoffs import safe_checkpoint
+                    native_binding = {'checkpoint': safe_checkpoint(args.get('url')),
+                        'mission_digest': canonical_digest(mission), 'profile_digest': canonical_digest(profile)}
+                else:
+                    selected_profile = {**profile, 'browser_backend': 'playwright'}
+            session=await e.browser.create(self.job_id,selected_mission,selected_profile,agent_id=self.actor_id)
+            if native_binding:
+                session.native_scope_binding = native_binding
+            elif transport == 'playwright' and selected_profile != profile:
+                session.transport_profile_binding = {'transport': transport, 'mission_digest': canonical_digest(mission),
+                    'profile_digest': canonical_digest(profile)}
+            if args.get('url'):return await e.browser.action(session.id,'navigate',{'url': args['url']},owner_id=self.actor_id)
             return await e.browser.observe(session.id,owner_id=self.actor_id)
         if name in ('browser_observe','browser_action'):
-            session=e.browser.get(args['session_id'])
-            if session.job_id!=self.job_id:raise AccessDenied('Browser belongs to another job')
-            if mission.get('operator_access', {}).get('purpose') == 'provider_setup' and getattr(e, 'provider_enrollment', None):
-                await e.provider_enrollment.rebind(self, session)
-            if self.actor_id and session.agent_id!=self.actor_id:raise AccessDenied('Browser belongs to another agent task')
+            session=await self._browser_session(args['session_id'])
             if name=='browser_action' and getattr(session, 'enrollment_pending', None):
                 raise AccessDenied('Review the pending provider form action before changing this browser')
             if name=='browser_observe':return await e.browser.observe(session.id,owner_id=self.actor_id)
@@ -293,9 +329,7 @@ class ToolRuntime:
             policy=AccessPolicy(download_mission,profile,operation='download');await policy.check(args['url'])
             cookies=[]
             if args.get('session_id'):
-                session=e.browser.get(args['session_id'])
-                if session.job_id!=self.job_id:raise AccessDenied('Browser belongs to another job')
-                if self.actor_id and session.agent_id!=self.actor_id:raise AccessDenied('Browser belongs to another agent task')
+                session=await self._browser_session(args['session_id'])
                 if session.control!='agent':raise AccessDenied('Browser is controlled by user')
                 if getattr(session.context, 'companion', False) or getattr(session.context, 'desktop', False):
                     if name=='fetch':raise AccessDenied('Use browser_observe for Chrome pages and download for original files')
@@ -368,9 +402,7 @@ class ToolRuntime:
                 path.write_bytes(content)
             return self.commit(path,{**args,'_requested_source_url':args['url'],'_redirect_chain':redirect_chain},str(response.url))
         if name=='artifact_commit':
-            session=e.browser.get(args['session_id'])
-            if session.job_id!=self.job_id:raise AccessDenied('Browser belongs to another job')
-            if self.actor_id and session.agent_id!=self.actor_id:raise AccessDenied('Browser belongs to another agent task')
+            session=await self._browser_session(args['session_id'])
             item=session.downloads[int(args['download_index'])]
             self._received_bytes(job, Path(item['path']).stat().st_size, observation_id=f"browser:{args['session_id']}:{args['download_index']}")
             return self.commit(Path(item['path']),{**args,'filename':item['filename'],'_requested_source_url':item.get('requested_source_url',item['url']),'_redirect_chain':item.get('redirect_chain',[item['url']])},item['url'])
@@ -390,8 +422,8 @@ class ToolRuntime:
                 if result.get(key):result[key]=s.add_artifact(self.job_id,{**result[key],'resource_id':artifact.get('resource_id')},lease=self.lease)
             return result
         if name=='page_extract':
-            session=e.browser.get(args['session_id'])
-            if session.job_id!=self.job_id or session.control!='agent':raise AccessDenied('Browser ownership mismatch')
+            session=await self._browser_session(args['session_id'])
+            if session.control!='agent':raise AccessDenied('Browser ownership mismatch')
             async with session.lock:
                 await e.browser._authorize(session,'agent',args['epoch'],self.actor_id)
                 text=await session.page.locator(args['selector']).all_inner_texts()
@@ -411,15 +443,11 @@ class ToolRuntime:
             if len(s.tasks(self.job_id))>=mission.get('budget',{}).get('max_tasks',10000):raise AccessDenied('Task budget exhausted')
             return s.create_task(self.job_id,args.get('kind','retrieve'),{'goal':args['goal'],'urls':args.get('urls',[])},args['key'],lease=self.lease)
         if name=='challenge':
-            session=e.browser.get(args['session_id'])
-            if session.job_id!=self.job_id:raise AccessDenied('Browser belongs to another job')
-            if self.actor_id and session.agent_id!=self.actor_id:raise AccessDenied('Browser belongs to another agent task')
+            session=await self._browser_session(args['session_id'])
             if args.get('resolved'):return await e.browser.verify_challenge(session.id)
             return await e.browser.challenge(session.id)
         if name=='handoff':
-            session=e.browser.get(args['session_id'])
-            if session.job_id!=self.job_id:raise AccessDenied('Browser belongs to another job')
-            if self.actor_id and session.agent_id!=self.actor_id:raise AccessDenied('Browser belongs to another agent task')
+            session=await self._browser_session(args['session_id'])
             result=await e.browser.takeover(args['session_id'])
             if not self.task:s.update_job(self.job_id,status='awaiting_user')
             return {**result,'reason':args.get('reason')}

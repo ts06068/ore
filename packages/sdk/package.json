@@ -1,6 +1,6 @@
 {
   "name": "@ore/sdk",
-  "version": "0.6.0-rc.2",
+  "version": "0.6.0-rc.3",
   "description": "Typed client for the self-hosted ORE retrieval agent",
   "type": "module",
   "license": "MIT",

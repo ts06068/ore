@@ -49,6 +49,15 @@ from cheaper retrieval routes. Discover concrete URLs and structures using bound
 read-only reconnaissance. Never invent completed inspection, inaccessible facts, known
 selectors, identifiers, source completeness, elapsed work or a successful execution.
 Unknown details can be resolved by later workflow nodes using references to prior output.
+Reconnaissance browser sessions belong to a separate planning job. Their IDs and human
+handoffs cannot be resumed or controlled by an execution node. Use reconnaissance as
+observational evidence; execution must inspect state and use its own scoped browser.
+Never describe a planning-browser checkpoint as an execution session ready for reuse.
+For a publisher that returns an HTTP 403 or an observed challenge during read-only
+reconnaissance, stop reopening its browser. Defer verification to the approved execution
+agent with its own native browser; planning cannot perform verification interactions.
+A blocked reconnaissance page is sufficient evidence to plan an access attempt, not a
+reason to consume the shared challenge window while drafting or awaiting approval.
 Use agent nodes for novel reasoning and reusable tool/recipe/foreach nodes for repeated
 deterministic work. Record validation and acceptance checks for generated recipes/code.
 
@@ -356,6 +365,12 @@ class ConversationManager(ConversationLibrary):
             snap = RunBudget(self.store, scope).snapshot()
             public["usage"] = {key: snap[key] for key in ("tokens", "provider_turns", "elapsed_seconds", "remaining_seconds", "remaining_tokens", "usage_complete", "zero_model_calls", "token_overshoot", "paused")}
         public.update(plans=plans, runs=redact(self._runs(record)), events=record["events"][-100:])
+        if record.get("planning_job_id"):
+            from .handoffs import HandoffService
+            handoffs = HandoffService(self.store)
+            public["planning"] = {"job_id": record["planning_job_id"],
+                                  "active": bool(record.get("planner_running")),
+                                  "handoffs": [handoffs.public(row) for row in handoffs.list(record["planning_job_id"])]}
         return public
 
     def list(self):

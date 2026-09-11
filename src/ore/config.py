@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     desktop_image: str = "ore-desktop:0.2.0rc1"
     desktop_host_state_dir: Path | None = None
     desktop_resource_mode: str = "cgroup"
+    desktop_memory: str = "4g"
     browser_headless: bool = True
     browser_proxy: str | None = None
     host: str = '127.0.0.1'

@@ -21,6 +21,7 @@ def test_managed_policy_exact_origins_and_resource_controls(tmp_path):
     assert policy['URLBlocklist']==['*','chrome://*','file://*','devtools://*']
     assert policy['URLAllowlist']==['http://.example.test:8080','https://.example.test:443','about:blank']
     assert policy['DeveloperToolsAvailability']==2
+    assert policy['GenAILocalFoundationalModelSettings']==1
     runtime=DesktopRuntime(tmp_path)
     args=runtime._run_args(make_session(tmp_path),tmp_path/'policy.json')
     assert '--cap-drop=ALL' in args and '--security-opt=no-new-privileges:true' in args

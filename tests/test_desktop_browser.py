@@ -349,3 +349,69 @@ async def test_native_issue_handoff_recovery_rejects_challenge_even_with_visible
     assert (await target_recovered(session))[0]
     runtime.value['text'] += '\nVerify you are human'
     assert not (await target_recovered(session))[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('configured,expected', [(None, '4g'), ('6g', '6g')])
+async def test_browser_settings_memory_reaches_native_container_limits(tmp_path, monkeypatch, configured, expected):
+    import json
+    from ore.browser import BrowserManager
+    from ore.config import Settings
+    from ore.desktop import DesktopRuntime
+    from ore.policy import RateLimiter
+
+    if configured is None:
+        monkeypatch.delenv('ORE_DESKTOP_MEMORY', raising=False)
+    else:
+        monkeypatch.setenv('ORE_DESKTOP_MEMORY', configured)
+    settings = Settings(state_dir=tmp_path / 'state', auth_token='fixture',
+                        browser_backend='desktop_chrome', desktop_resource_mode='cgroup').prepare()
+    calls = []
+    async def command(runtime, args, **kwargs):
+        calls.append(args)
+        if args[0] == 'exec':
+            request = json.loads(kwargs['data'])
+            assert request['action'] == 'ready'
+            return b'{"ready": true}'
+        return b'fixture-container'
+    monkeypatch.setattr(DesktopRuntime, '_command', command)
+    manager = BrowserManager(settings, RateLimiter())
+    try:
+        session = await manager.create('fixture-job',
+            {'goal': 'Read fixture', 'allowed_origins': ['https://journal.test']},
+            {'id': 'fixture', 'allow_private_network': True})
+        launch = next(args for args in calls if args[0] == 'run')
+        assert launch[launch.index('--memory') + 1] == expected
+        assert launch[launch.index('--memory-swap') + 1] == expected
+        assert '--pids-limit' in launch and '--cpus' in launch
+        policies = list((settings.state_dir / 'desktop' / 'policies').glob('*.json'))
+        assert len(policies) == 1
+        assert json.loads(policies[0].read_text())['GenAILocalFoundationalModelSettings'] == 1
+        assert session.context.desktop
+    finally:
+        await manager.close()
+    assert len([args for args in calls if args[0] == 'stop']) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_configured_memory_fails_before_starting_a_desktop(tmp_path, monkeypatch):
+    from ore.browser import BrowserManager
+    from ore.config import Settings
+    from ore.desktop import DesktopRuntime
+    from ore.policy import RateLimiter
+    from unittest.mock import AsyncMock
+    monkeypatch.setenv('ORE_DESKTOP_MEMORY', '0g')
+    settings = Settings(state_dir=tmp_path / 'state', auth_token='fixture',
+                        browser_backend='desktop_chrome').prepare()
+    command = AsyncMock()
+    monkeypatch.setattr(DesktopRuntime, '_command', command)
+    manager = BrowserManager(settings, RateLimiter())
+    try:
+        with pytest.raises(ValueError, match='Invalid desktop resource limits'):
+            await manager.create('fixture-job',
+                {'goal': 'Read fixture', 'allowed_origins': ['https://journal.test']},
+                {'id': 'fixture', 'allow_private_network': True})
+        command.assert_not_awaited()
+        assert not manager.sessions
+    finally:
+        await manager.close()

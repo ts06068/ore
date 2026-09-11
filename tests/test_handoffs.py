@@ -166,3 +166,71 @@ async def test_source_exclusion_keeps_old_handoffs_out_of_resume_blocklist(clien
     assert engine.handoffs.list(job['id'],'active')==[]
     assert engine.handoffs.get(old['id'])['request_revision']==1
     assert engine.handoffs.public(engine.handoffs.get(second['id']))['superseded']
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_planning_handoff_returns_browser_without_starting_collection(client, engine, legacy):
+    await login(client)
+    job = engine.store.create_job(mission())
+    engine.store.update_job(job['id'], status='draft')
+    conversation_id = 'planning-handoff-conversation'
+    if not legacy:
+        engine.store.update_job(job['id'], purpose='planning_reconnaissance', conversation_id=conversation_id)
+    engine.store.put_document('conversation', conversation_id, {'id': conversation_id,
+        'record': {'id': conversation_id, 'planning_job_id': job['id'], 'run_ids': [], 'planner_running': False}}, expected_version=0)
+    session = SimpleNamespace(id='planning-browser', job_id=job['id'], epoch=7, control='human', closed=False)
+    summary = {'id': session.id, 'job_id': job['id'], 'epoch': 7, 'control': 'human', 'url': 'https://journal.test/'}
+    original_execution = engine.execution
+    async def command(sid, name, arguments):
+        if name == 'observe': return {'challenge_detected': False}
+        if name == 'resume': return {**summary, 'epoch': 9, 'control': 'agent'}
+        raise AssertionError(name)
+    engine.execution = SimpleNamespace(enabled=True, authorize_request=lambda request: False,
+        has_session=lambda sid: sid == session.id, get_session=lambda sid: session,
+        session_summary=AsyncMock(return_value=summary), browser_command=AsyncMock(side_effect=command))
+    try:
+        row = engine.handoffs.create(job['id'], 'browser', 'Verify planning access', session_id=session.id)
+        response = await client.post('/v1/handoffs/' + row['id'] + '/actions', json={
+            'action': 'resume', 'expected_version': row['state_version'], 'expected_epoch': 7,
+            'idempotency_key': 'verify-planning-access'})
+        assert response.status_code == 200, response.text
+        value = response.json()
+        assert value['status'] == 'resolved' and value['resolution'] == 'planning_access_verified'
+        assert value['execution_resumed'] is False
+        assert value['conversation_context']['phase'] == 'planning'
+        assert [call.args[1] for call in engine.execution.browser_command.await_args_list] == ['observe', 'resume']
+        assert engine.store.tasks(job['id']) == []
+        assert engine.store.get_job(job['id'])['status'] == 'draft'
+        from ore.policy import AccessDenied
+        with pytest.raises(AccessDenied, match='planning reconnaissance'):
+            await engine.run(job['id'])
+        assert engine.store.tasks(job['id']) == []
+    finally:
+        engine.execution = original_execution
+
+
+async def test_planning_context_distinguishes_current_collection_without_mutating_request(engine):
+    planning = engine.create(mission(), queued=False)
+    execution = engine.create(mission(), queued=False)
+    engine.store.update_job(planning['id'], purpose='planning_reconnaissance', conversation_id='context-chat')
+    engine.store.put_document('workflow.run', 'context-run', {'id': 'context-run', 'job_id': execution['id'], 'status': 'awaiting_auth'}, job_id=execution['id'])
+    engine.store.put_document('conversation', 'context-chat', {'record': {'id': 'context-chat', 'planning_job_id': planning['id'], 'planner_running': False, 'run_ids': ['context-run']}})
+    row = engine.handoffs.create(planning['id'], 'challenge', 'Verify this browser', session_id='planning-browser')
+    public = engine.handoffs.public(row)
+    assert public['conversation_context'] == {
+        'phase': 'planning', 'conversation_id': 'context-chat', 'conversation_href': '/chat/context-chat',
+        'planning_active': False, 'historical': True, 'active_execution_job_id': execution['id'],
+        'active_execution_status': 'awaiting_auth'}
+    assert public['job_id'] == planning['id']
+    assert public['session_id'] == 'planning-browser'
+    assert engine.handoffs.get(row['id']) == row
+    assert 'conversation_context' not in engine.handoffs.get(row['id'])
+
+
+async def test_current_planning_context_does_not_hide_new_planner_requests(engine):
+    planning = engine.create(mission(), queued=False)
+    engine.store.update_job(planning['id'], purpose='planning_reconnaissance', conversation_id='active-chat')
+    engine.store.put_document('conversation', 'active-chat', {'record': {'id': 'active-chat', 'planner_running': True, 'run_ids': ['previous-run']}})
+    row = engine.handoffs.create(planning['id'], 'challenge', 'Planning verification')
+    assert engine.handoffs.public(row)['conversation_context']['historical'] is False
+    assert engine.handoffs.public(row)['conversation_context']['planning_active'] is True

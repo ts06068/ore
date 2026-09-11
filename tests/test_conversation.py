@@ -554,3 +554,20 @@ def test_event_history_is_bounded_ordered_and_turn_associated(setup):
     assert latest['has_more'] and earlier['has_more']
     assert [event['id'] for event in earlier['events']+latest['events']]==list(range(5,11))
     assert all(event['operator_message_id']=='user-turn' for event in latest['events'])
+
+
+async def test_snapshot_exposes_planning_handoff_ownership_without_exposing_private_context(setup):
+    engine, manager = setup
+    from ore.handoffs import HandoffService
+    chat = manager.create({})
+    runtime = manager._planning_runtime(chat['id'])
+    service = HandoffService(engine.store)
+    request = service.create(runtime.job_id, 'challenge', 'Planning browser access', session_id='planning-session')
+    before = engine.store.get_document('handoff', request['id'])
+    public = manager.get(chat['id'])
+    assert public['planning']['job_id'] == runtime.job_id
+    assert public['planning']['active'] is False
+    assert public['planning']['handoffs'][0]['conversation_context']['phase'] == 'planning'
+    assert public['planning']['handoffs'][0]['job_id'] == runtime.job_id
+    assert 'context' not in public and 'planning_job_id' not in public
+    assert engine.store.get_document('handoff', request['id']) == before

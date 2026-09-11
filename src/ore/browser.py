@@ -473,7 +473,8 @@ class BrowserManager:
             runtime = self.desktop_runtime = DesktopRuntime(self.settings.state_dir / 'desktop',
                 image=getattr(self.settings, 'desktop_image', 'ore-desktop:0.2.0rc1'),
                 host_state_dir=getattr(self.settings, 'desktop_host_state_dir', None), width=1280, height=800,
-                resource_mode=getattr(self.settings, 'desktop_resource_mode', 'cgroup'))
+                resource_mode=getattr(self.settings, 'desktop_resource_mode', 'cgroup'),
+                memory=getattr(self.settings, 'desktop_memory', '4g'))
         sid = uuid.uuid4().hex
         context = await create_context(runtime, sid, mission, profile)
         page = context.pages[0]

@@ -67,6 +67,7 @@ def managed_policy(origins):
             'DownloadDirectory': '/state/downloads', 'PromptForDownloadLocation': False, 'AlwaysOpenPdfExternally': True,
             'DeveloperToolsAvailability': 2, 'ExtensionInstallBlocklist': ['*'],
             'BrowserSignin': 0, 'SyncDisabled': True, 'DefaultBrowserSettingEnabled': False,
+            'GenAILocalFoundationalModelSettings': 1,
             'BrowserGuestModeEnabled': False, 'IncognitoModeAvailability': 1}
 
 

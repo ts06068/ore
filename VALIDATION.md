@@ -1,4 +1,18 @@
-# ORE 0.6.0rc2 validation — 2026-09-11
+# ORE 0.6.0rc3: EHJ recovery — 2026-09-11
+
+[Release behavior](docs/release-0.6-rc3.md). A real Astra/high agent reached the EHJ homepage in ordinary Chrome in 53 seconds, with one reserved checkbox click and a resolved episode. Exact URL, screenshot hash and journal/publisher branding were observed. The earlier 2 GiB run stopped at its memory threshold after 8.5 seconds; the successful run used the new 4 GiB budget. No article PDF or supplement was downloaded by this access diagnostic.
+
+- Full initial Python regression: **979 passed** in 309.43 seconds; one dependency deprecation warning. Final issue-checkpoint and scope audit: **90 passed**.
+- Web: **140 tests passed**, production build passed; SDK: **16 tests passed**; wheel/sdist/core-only/Claude-extra/npm clean installation passed.
+- Installed wheel: **77 Python modules match the source checkout**. Four candidate API routes passed.
+- Running service: **0.6.0rc3** on port 8765, all **54 existing jobs** and prior chat/plan records preserved. The original EHJ request was repaired in its same approved envelope, retaining seven operation receipts, the old native session, eight challenge records, both existing messages and consumed budget. A transparent assistant maintenance message was added.
+- Installed chat browser check: history separated from current requests, old planning request has no collection-resume control, no page errors.
+
+Evidence: `.ore/releases/0.6.0rc3/`, `.ore/ehj-recovery/ui-installed.json`, `.ore/ehj-recovery/native/20260911T073915Z-72001a/reports/desktop-diagnosis.json`. The original collection then selected native Chrome correctly but inherited the expired planning-stage challenge deadline. The separate operator retry path addresses that stale allocation without granting the agent an automatic reset.
+
+These checks establish the tested recovery behavior. Complete June 2024 issue enumeration and all main/supplementary downloads remain separate acceptance requirements.
+
+# Historical ORE 0.6.0rc2 validation — 2026-09-11
 
 The running rc2 release adds chat-driven connection setup, protected provider enrollment actions, source-profile propagation, clearer planner errors and nested conversation lineage within purpose folders. [Release behavior](docs/release-0.6-rc2.md), [Korean-source evidence](docs/release-0.6-rc2-sources.md). Candidate implementation, package installation, running-service promotion and live collection are distinct checks; earlier release results below remain historical.
 

@@ -1,4 +1,4 @@
-import type {Conversation,ConversationEvent,ConversationMessage,ConversationSummary,PlanRevision,WorkflowRun} from '@ore/sdk';
+import type {Conversation,ConversationEvent,ConversationMessage,ConversationSummary,JsonObject,PlanRevision,WorkflowRun} from '@ore/sdk';
 import {record,text} from './format';
 
 /** Replay only public response deltas. Provider reasoning never enters this reducer. */
@@ -58,4 +58,24 @@ export function conversationBranches(conversations:ConversationSummary[]):Conver
  const roots:ConversationBranch[]=[];
  for(const node of nodes.values()){const parent=parents.get(node.conversation.id);if(parent)nodes.get(parent)!.children.push(node);else roots.push(node);}
  return roots;
+}
+
+
+const activeHandoffStates=new Set(['needs_user','claimed','waiting_external','recovering']);
+export function isHistoricalHandoff(handoff:JsonObject):boolean{
+ return Boolean(handoff.superseded)||record(handoff.conversation_context).historical===true||['resolved','cancelled','superseded'].includes(text(handoff.status,''));
+}
+/** Only the current task's requests may be presented as ways to continue it. */
+export function conversationHandoffs(conversation:Conversation|null,requests:JsonObject[]){
+ const current=conversation?.runs.find(run=>run.id===conversation.active_run_id)??conversation?.runs.at(-1);
+ const planning=record(conversation?.planning);
+ const latest=new Map<string,JsonObject>();
+ for(const item of requests){const id=text(item.id,'');if(!id)continue;const previous=latest.get(id);if(!previous||Number(item.state_version??0)>=Number(previous.state_version??0))latest.set(id,item);}
+ const active:JsonObject[]=[],history:JsonObject[]=[];
+ for(const item of latest.values()){
+  const currentExecution=Boolean(current?.job_id)&&item.job_id===current?.job_id;
+  const currentPlanning=Boolean(planning.job_id)&&item.job_id===planning.job_id&&(!current||planning.active===true);
+  if(activeHandoffStates.has(text(item.status,''))&&!isHistoricalHandoff(item)&&(currentExecution||currentPlanning))active.push(item);else history.push(item);
+ }
+ return {active,history};
 }

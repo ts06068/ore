@@ -15,7 +15,8 @@ def redact(value):
         return {k:('[redacted]' if k.lower().replace('-','_') in {'password','passwd','secret','token','api_key','apikey','cookie','cookies','set_cookie','authorization','access_token','refresh_token','x_els_apikey','x_apikey'} else redact(v)) for k,v in value.items()}
     if isinstance(value,list): return [redact(x) for x in value]
     if isinstance(value,str) and value.startswith(('https://','http://')):
-        u=urlsplit(value)
+        try:u=urlsplit(value)
+        except ValueError:return '[invalid URL omitted]'
         query=[(k,'[redacted]' if any(s in k.lower() for s in ('key','token','signature','credential','auth','__cf_chl')) else v) for k,v in parse_qsl(u.query,keep_blank_values=True)]
         return urlunsplit((u.scheme,u.netloc,u.path,urlencode(query),''))
     return value

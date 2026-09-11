@@ -11,7 +11,7 @@ ProviderFieldBinding=schema('ProviderFieldBinding',target=(int,Field(ge=0,le=511
 
 ACTION_MODELS={
  'state':schema('State'),
- 'browser_open':schema('BrowserOpen',url=(str|None,None)),
+ 'browser_open':schema('BrowserOpen',url=(str|None,None),transport=(Literal['desktop_chrome','playwright']|None,None)),
  'browser_observe':schema('BrowserObserve',session_id=(str,...)),
  'browser_action':schema('BrowserAction',session_id=(str,...),action=(Literal['navigate','click','type','key','scroll','wait','tab','back'],...),epoch=(int,...),url=(str|None,None),target=(int|None,None),selector=(str|None,None),x=(float|int|None,None),y=(float|int|None,None),text=(str|None,None),key=(str|None,None),deltaY=(float|int|None,None),deltaX=(float|int|None,None),index=(int|None,None),seconds=(float|int|None,None)),
  'provider_form':schema('ProviderForm',operation=(Literal['inspect','fill','propose_fill','propose_click','capture_key'],...),session_id=(str,...),epoch=(int,Field(ge=1)),url=(str|None,None),form_fingerprint=(str|None,None),fields=(list[ProviderFieldBinding]|None,Field(default=None,min_length=1,max_length=16)),target=(int|None,Field(default=None,ge=0))),

@@ -12,7 +12,7 @@ ORE is a self-hosted agent runtime for repeatable web retrieval. Describe what y
 
 Use it for general web extraction or scholarly collections, including article PDFs and supplementary files. The Python engine runs the work; the web console and TypeScript SDK provide access to it.
 
-**Status:** `0.6.0rc2` · Install from source; packages have not been published to public registries. See [validation](VALIDATION.md) for tested behavior and remaining gaps.
+**Status:** `0.6.0rc3` · Install from source; packages have not been published to public registries. See [validation](VALIDATION.md) for tested behavior and remaining gaps.
 
 ## Agent architecture
 

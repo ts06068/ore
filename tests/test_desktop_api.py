@@ -304,3 +304,33 @@ async def test_legacy_taskless_operator_request_uses_saved_checkpoint_only(setup
     assert browser.calls[0][1]['allowed_origins']==['https://journal.test','https://support.test']
     assert engine.store.get_job(job['id'])==before_job
     assert engine.store.list_documents('challenge',job_id=job['id'])==before_challenges
+
+
+async def test_ehj_preview_and_attachment_include_packaged_frame_without_changing_all_article_scope(setup):
+    engine, client, _, _, _, profile = setup
+    checkpoint = 'https://academic.oup.com/eurheartj/issue/45/21'
+    value = mission(allowed_origins=['https://academic.oup.com'], urls=[checkpoint],
+                    scope={'journal_id': 'ehj', 'article_types': 'all', 'exclude_related_journals': True})
+    job = engine.create(value, queued=False)
+    h = engine.handoffs.create(job['id'], 'challenge', 'EHJ access request', session_id='old',
+        context={'url': checkpoint, 'challenge_id': 'preserved-ehj-episode', 'epoch': 2})
+    browser = NativeBrowserFixture(engine, job, profile);engine.browser = browser
+    browser.sessions['old'].page.url = checkpoint
+    before_job = deepcopy(engine.store.get_job(job['id']))
+    before_profile = deepcopy(engine.profile(job['mission']))
+    preview = await client.get('/v1/desktop/preview', params={'handoff_id': h['id']}, headers=auth())
+    assert preview.status_code == 200, preview.text
+    assert 'https://challenges.cloudflare.com' in preview.json()['origins']
+    assert preview.json()['checkpoint_url'] == checkpoint and not browser.calls
+    assert engine.store.get_job(job['id']) == before_job
+    response = await client.post('/v1/desktop/attach', json=payload(h, 'attach-ehj-issue'), headers=auth())
+    assert response.status_code == 200, response.text
+    created = next(call for call in browser.calls if call[0] == 'create')
+    assert 'https://challenges.cloudflare.com' in created[1]['allowed_origins']
+    assert created[1]['desktop_issue_checkpoint'] == checkpoint
+    assert created[1]['scope']['article_types'] == 'all'
+    assert created[1]['scope']['exclude_related_journals'] is True
+    assert created[1]['on_challenge'] == before_job['mission']['on_challenge']
+    assert response.json()['challenge_id'] == 'preserved-ehj-episode'
+    assert engine.store.get_job(job['id']) == before_job
+    assert engine.profile(job['mission']) == before_profile

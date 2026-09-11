@@ -434,7 +434,9 @@ async def target_recovered(session):
     if isinstance(markers, str):
         markers = [markers]
     checkpoint = session.mission.get('desktop_issue_checkpoint')
-    if not markers and checkpoint:
+    if checkpoint:
+        # A known issue requires its own volume and issue evidence even when
+        # the session previously used generic homepage or profile markers.
         matches = issue_checkpoint_observed(checkpoint, url, value['title'] + '\n' + value['text'])
         marker_count = 3  # observed brand, volume and issue at the exact checkpoint
     else:

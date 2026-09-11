@@ -116,12 +116,47 @@ class HandoffService:
         self.store.append_event(job_id, 'handoff.created', {'handoff_id': ident, 'kind': kind, 'href': value['href']})
         return result
 
+    def conversation_context(self, job_id):
+        """Expose ownership facts without moving a browser or changing its authority."""
+        job = self.store.get_job(job_id)
+        if not job:
+            return None
+        run = self.store.get_document('workflow.run', job['workflow_run_id']) if job.get('workflow_run_id') else None
+        planning = job.get('purpose') == 'planning_reconnaissance'
+        conversation_id = job.get('conversation_id') if planning else (run or {}).get('plan', {}).get('conversation_id')
+        if not planning and not run:
+            # Older reconnaissance jobs predate purpose/conversation metadata.
+            # The host's retained conversation record is authoritative linkage.
+            linked = next((document.get('record', {}) for document in self.store.list_documents('conversation')
+                           if document.get('record', {}).get('planning_job_id') == job_id), None)
+            if linked:
+                planning, conversation_id = True, linked['id']
+        if not conversation_id:
+            return {'phase': 'planning'} if planning else None
+        document = self.store.get_document('conversation', conversation_id)
+        record = (document or {}).get('record', {})
+        active_run_id = record.get('active_run_id') or next(iter(reversed(record.get('run_ids', []))), None)
+        active_run = self.store.get_document('workflow.run', active_run_id) if active_run_id else None
+        active_job = (active_run or {}).get('job_id')
+        return {'phase': 'planning' if planning else 'execution',
+                'conversation_id': conversation_id, 'conversation_href': f'/chat/{conversation_id}',
+                'planning_active': bool(record.get('planner_running')),
+                'historical': bool(planning and active_run_id and not record.get('planner_running')),
+                **({'active_execution_job_id': active_job,
+                    'active_execution_status': active_run.get('status')} if active_job else {})}
+
     def public(self, row):
         if not self.is_current(row):
             row = {**row, 'superseded': True}
             if row['status'] in ACTIVE:
                 row.update(status='cancelled', resolution='mission_contract_superseded',
                            reason='This request belongs to an earlier mission revision or refresh. Inspect the current mission for active requests.')
+        context = self.conversation_context(row['job_id'])
+        if context:
+            row = {**row, 'conversation_context': context}
+        if row.get('challenge_id'):
+            from .operator_retry import retry_metadata
+            row = {**row, 'automatic_retry': retry_metadata(self.store, row)}
         return redact({key: value for key, value in row.items() if key not in ('receipts', 'inflight')})
 
     def recover_interrupted_actions(self):
@@ -315,15 +350,21 @@ def create_handoff_router(engine, browser):
     async def act(ident: str, request: Request):
         body = await request.json()
         action, key, version = body.get('action'), body.get('idempotency_key'), body.get('expected_version')
-        if action not in ('claim', 'recreate_session', 'resume', 'exclude_operation', 'mark_pending', 'cancel'):
+        if action not in ('claim', 'recreate_session', 'resume', 'retry_verification', 'exclude_operation', 'mark_pending', 'cancel'):
             raise ValueError('Unsupported handoff action')
         if not isinstance(version, int) or isinstance(version, bool) or version < 1:
             raise ValueError('expected_version is required')
+        if action == 'retry_verification':
+            from .desktop_api import _operator
+            _operator(request, engine)
         current = engine.handoffs.get(ident)
         sid = current.get('session_id')
         receipt = current.get('receipts', {}).get(key)
         if receipt:
             if receipt['action'] != action:raise LeaseLost('Idempotency key was already used')
+            if action == 'retry_verification':
+                from .operator_retry import resume_authorized_retry
+                current = await resume_authorized_retry(engine, current, key)
             return await output(current)
         if action in ('claim', 'resume') and sid and browser.exists(sid):
             if body.get('expected_epoch') != (await browser.summary(sid)).get('epoch'):
@@ -350,6 +391,9 @@ def create_handoff_router(engine, browser):
                 summary = await browser.command(sid, 'takeover')
                 await browser.command(sid, 'action', {'action': 'navigate', 'url': target, 'epoch': summary['epoch']})
                 changes = {'status': 'claimed', 'session_id': sid, 'session_state': 'live', 'control_epoch': summary['epoch'], 'checkpoint_url': target}
+            elif action == 'retry_verification':
+                from .operator_retry import retry_verification
+                changes = await retry_verification(engine, browser, row, body)
             elif action == 'resume':
                 if row.get('source'):
                     from .source_policy import source_readiness
@@ -367,7 +411,13 @@ def create_handoff_router(engine, browser):
                         if not result.get('resolved'):
                             raise AccessDenied('The original target has not recovered')
                     await browser.command(sid, 'resume', {'epoch': body['expected_epoch']})
-                changes = {'status': 'resolved', 'resolution': 'verified_and_resumed'}
+                planning = engine.handoffs.conversation_context(record['id'])
+                if planning and planning.get('phase') == 'planning':
+                    changes = {'status': 'resolved', 'resolution': 'planning_access_verified',
+                        'execution_resumed': False,
+                        'reason': 'Planning browser access was verified. Return to the conversation to continue planning or review the current execution; this browser does not resume the collection.'}
+                else:
+                    changes = {'status': 'resolved', 'resolution': 'verified_and_resumed'}
             elif action == 'exclude_operation':
                 from .source_policy import normalize_source_policy, canonical_operation
                 source = row.get('source') or body.get('source')
@@ -395,7 +445,10 @@ def create_handoff_router(engine, browser):
             elif action == 'cancel':
                 changes = {'status': 'cancelled', 'resolution': 'operator_cancelled'}
             result = engine.handoffs.finish_action(ident, action, key, changes)
-            if action == 'resume':
+            if action == 'retry_verification':
+                from .operator_retry import resume_authorized_retry
+                result = await resume_authorized_retry(engine, result, key)
+            elif action == 'resume' and result.get('resolution') != 'planning_access_verified':
                 await engine.run(record['id'])
             return await output(result)
         except BaseException:

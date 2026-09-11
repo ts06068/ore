@@ -871,3 +871,5 @@ td{font-size:12px}
 .runtime-details .runtime-footnote{font-size:11px;color:var(--muted)}
 .chat-column>.runtime-details{margin:18px 0 24px;padding:13px 17px;border:1px solid var(--line);border-radius:10px}
 @media(max-width:480px){.runtime-details dl{grid-template-columns:1fr}.runtime-details>summary>small{display:block;margin-left:17px}}
+
+.handoff-access-note{display:block}.handoff-access-note p{margin:8px 0}.handoff-access-note>.button{margin-top:4px;max-width:100%;white-space:normal}

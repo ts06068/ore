@@ -44,3 +44,21 @@ def test_concurrent_secret_writers_preserve_entries(tmp_path):
     Settings(state_dir=tmp_path,auth_token='synthetic').prepare();store=SecretStore(tmp_path)
     with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(lambda i:SecretStore(tmp_path).set(f'fixture/{i}',str(i)),range(20)))
     assert all(store.get(f'fixture/{i}')==str(i) for i in range(20))
+
+
+@pytest.mark.parametrize('url', [
+    'https://[probe].challenges.cloudflare.com',
+    'https://[probe].dnstest.dev/private?token=fixture-secret',
+    'http://[unfinished/private?token=fixture-secret',
+])
+def test_redaction_handles_synthetic_and_malformed_urls_without_losing_other_evidence(url):
+    value = redact({'url_origin': url, 'diagnostic': {'expected': True, 'url_sha256': 'a' * 64},
+                    'request': 'https://journal.test/paper?token=fixture-secret&article=2'})
+    assert value['url_origin'] == '[invalid URL omitted]'
+    assert value['diagnostic'] == {'expected': True, 'url_sha256': 'a' * 64}
+    assert 'article=2' in value['request'] and 'fixture-secret' not in str(value)
+
+
+def test_redaction_preserves_valid_ipv6_origins():
+    assert redact('https://[2001:db8::1]/paper?token=fixture-secret&article=2').startswith('https://[2001:db8::1]/paper?')
+    assert 'fixture-secret' not in redact('https://[2001:db8::1]/paper?token=fixture-secret&article=2')

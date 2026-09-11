@@ -187,6 +187,8 @@ def observe(store, job_id, origin, auth_context, observation=None):
         old = store._doc(conn, 'challenge', identity)
         value = dict(old['data']) if old else None
         if value and value['state'] != 'resolved':
+            if value.get('operator_retry') and value['operator_retry']['job_id'] != job_id:
+                return {**_public(value, now), 'state': 'awaiting_user', 'stop_reason': 'operator_retry_owned_by_another_job'}
             join_policy(store, conn, value, job, now)
             if value.get('clock') == 'elapsed':
                 _expire_reservation(store, conn, value, now)
@@ -226,6 +228,8 @@ def reserve(store, job_id, identity):
         if not old: raise ControlConflict('Challenge observation is required')
         value = dict(old['data'])
         if value['state'] == 'resolved': return {**_public(value,now),'allowed':False,'reason':'observation_required'}
+        if value.get('operator_retry') and value['operator_retry']['job_id'] != job_id:
+            return {**_public(value, now), 'allowed': False, 'reason': 'operator_retry_owned_by_another_job', 'state': 'awaiting_user'}
         join_policy(store, conn, value, job, now)
         _expire_reservation(store, conn, value, now)
         _enforce_limits(value, now)

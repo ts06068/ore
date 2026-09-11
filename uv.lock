@@ -711,7 +711,7 @@ wheels = [
 
 [[package]]
 name = "ore-engine"
-version = "0.6.0rc2"
+version = "0.6.0rc3"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

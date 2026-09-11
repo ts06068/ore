@@ -31,6 +31,32 @@ CONTROL_SPECS = [
 ]
 
 
+
+def recoverable_http_access_failure(outcome):
+    """A failed HTTP read is evidence for another route, not a login request.
+
+    Only the host's confirmed fallback-capable 403 result qualifies. Explicit
+    credential gates, human handoffs, and unknown effects still stop execution.
+    """
+    payload = outcome.payload
+    return (outcome.status == 'awaiting_auth' and isinstance(payload, dict)
+            and payload.get('error') is True and payload.get('status') == 403
+            and payload.get('code') == 'http_error'
+            and payload.get('recoverable') is True and payload.get('fallback_allowed') is True
+            and not payload.get('needs_user') and payload.get('allowed') is not False
+            and not payload.get('required'))
+
+
+def fallback_result(outcome):
+    return {'error': True, **outcome.payload, 'workflow_status': 'running',
+            'instruction': 'This HTTP route failed; no login requirement was established. '
+                'Keep the failed receipt and choose another route within the existing mission, '
+                'source policy and challenge budget. Browser actions require a session owned '
+                'by this execution task. If the HTTP client or Playwright is blocked, browser_open with '
+                'transport=desktop_chrome selects ordinary Chrome under the same policy and challenge budget. '
+                'Use screenshot/coordinate input and verify the actual target page; it has no DOM or cookie export. '
+                'Do not repeatedly retry the same failed HTTP request.'}
+
 def claude_route(provider, mission):
     config = provider if isinstance(provider, dict) else {}
     routing = mission.get('routing') or {}
@@ -297,6 +323,8 @@ class NativeWorkflowRuntime:
                 try:
                     result = await manager._tool(task, runtime, ctx.name, args, ctx.operation_id)
                 except NodeOutcome as exc:
+                    if recoverable_http_access_failure(exc):
+                        return fallback_result(exc)
                     if exc.status in ('awaiting_user', 'awaiting_auth', 'paused_budget'):
                         control = {'kind': 'blocked', 'status': exc.status, 'payload': exc.payload}
                         persist(pending_native_control=control)
@@ -324,11 +352,14 @@ class NativeWorkflowRuntime:
                 session.request_yield('needs_reconciliation')
                 value = {'error': True, **control['payload']}
             except NodeOutcome as exc:
-                if exc.status in ('awaiting_user', 'awaiting_auth', 'paused_budget', 'needs_reconciliation'):
-                    control = {'kind': 'blocked', 'status': exc.status, 'payload': exc.payload}
-                    persist(pending_native_control=control)
-                    session.request_yield(exc.status)
-                value = {'error': True, **exc.payload, 'workflow_status': exc.status}
+                if recoverable_http_access_failure(exc):
+                    value = fallback_result(exc)
+                else:
+                    if exc.status in ('awaiting_user', 'awaiting_auth', 'paused_budget', 'needs_reconciliation'):
+                        control = {'kind': 'blocked', 'status': exc.status, 'payload': exc.payload}
+                        persist(pending_native_control=control)
+                        session.request_yield(exc.status)
+                    value = {'error': True, **exc.payload, 'workflow_status': exc.status}
             except (AccessDenied, WorkflowError, ValueError, KeyError, IndexError, TypeError) as exc:
                 # Invalid local arguments/programs are model-visible tool errors,
                 # not a reason to discard the provider session or repair the plan.

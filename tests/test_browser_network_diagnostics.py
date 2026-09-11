@@ -14,6 +14,7 @@ from test_browser import browser_dependencies, make_manager, site
 ])
 async def test_browser_preserves_dns_semantics_and_scope(tmp_path, site, browser_dependencies, target, configured, expected):
     manager, store, _, job, mission = make_manager(tmp_path, site)
+    manager.on_event = store.append_event
     if configured:
         from urllib.parse import urlsplit
         u=urlsplit(target)
@@ -33,8 +34,20 @@ async def test_browser_preserves_dns_semantics_and_scope(tmp_path, site, browser
             await asyncio.sleep(.02)
         observation=session.network_failures[-1]
         assert observation['diagnostic']['expected'] is expected
+        # Classifiers replace opaque probe hostnames with a synthetic [probe]
+        # URL. General event redaction must not raise while parsing that value
+        # and silently turn an expected DNS observation into a callback error.
+        events = [event for event in store.events(job['id']) if event['type'] == 'browser.network_failure']
+        assert len(events) == 1
+        assert events[0]['payload']['diagnostic']['expected'] is expected
+        assert events[0]['payload']['diagnostic']['code'] == observation['diagnostic']['code']
+        assert not session.observer_errors
+        if expected:
+            assert events[0]['payload']['url_origin'] == '[invalid URL omitted]'
+            assert events[0]['payload']['diagnostic']['evidence']['probe_parent_domain'] == 'challenges.cloudflare.com'
+            assert len(events[0]['payload']['url_sha256']) == 64
         for private in ('private-probe', 'private-path', 'fixture-secret', 'fixture-session'):
-            assert private not in json.dumps(observation)
+            assert private not in json.dumps([observation, *events])
         if configured:
             assert observation['error_code'] == 'net::ERR_NAME_NOT_RESOLVED'
         else:

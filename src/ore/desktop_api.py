@@ -36,33 +36,17 @@ def _operator(request, engine):
         raise HTTPException(403, 'Cross-origin mutations are disabled')
 
 
-def _session_policy(mission, profile):
+def _session_policy(mission, profile, checkpoint=None):
+    from .native_scope import native_scope_copy
     policy = manual_policy(SimpleNamespace(mission=mission, policy=SimpleNamespace(profile=profile)))
-    copied_mission, copied_profile = deepcopy(policy.mission), deepcopy(policy.profile)
-    scope = copied_mission.get('scope') or {}
-    origins = copied_mission.get('allowed_origins') or scope.get('origins') or []
-    if not isinstance(origins, list) or not origins:
-        raise AccessDenied('Desktop attachment requires explicit mission origins')
-    additions = []
-    for values in (scope.get('asset_origins', []), scope.get('browser_support_origins', []),
-                   copied_profile.get('browser_support_origins', [])):
-        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-            raise AccessDenied('Desktop support origins must be an explicit finite list')
-        additions.extend(values)
-    if any(not isinstance(value, str) for value in origins) or len(origins) + len(additions) > 512:
-        raise AccessDenied('Desktop origin list is invalid or too large')
-    # This exact historical support entry is an expected negative DNS probe,
-    # not a required frame/navigation origin. Do not promote it or relax DNS
-    # checks for any other origin. Explicit primary origins remain authoritative.
-    probe = 'https://brunhild.challenges.cloudflare.com'
-    omitted = [value for value in set(additions) if value == probe and value not in origins]
-    additions = [value for value in additions if value not in omitted]
-    copied_mission['desktop_omitted_origins'] = [{'origin': value, 'reason': 'expected_negative_dns_probe'} for value in omitted]
-    copied_mission['allowed_origins'] = sorted(set(origins) | set(additions))
-    copied_profile.update(browser_backend='desktop_chrome', require_desktop=True)
-    # A forced native attachment is its own explicit transport choice.
+    original_origins = policy.mission.get('allowed_origins') or (policy.mission.get('scope') or {}).get('origins') or []
+    # Explicit operator attachment may select native transport over companion.
+    copied_profile = deepcopy(policy.profile)
     copied_profile.pop('require_companion', None)
-    return copied_mission, copied_profile, sorted(set(additions) - set(origins))
+    copied_profile['browser_backend'] = 'desktop_chrome'
+    copied_mission, copied_profile = native_scope_copy(policy.mission, copied_profile, checkpoint)
+    additions = sorted(set(copied_mission['allowed_origins']) - set(original_origins))
+    return copied_mission, copied_profile, additions
 
 
 def _native(session):
@@ -110,7 +94,7 @@ def create_desktop_router(engine):
         ref = job['mission'].get('access_profile_ref') or job['mission'].get('access_profile') or 'public'
         if h.get('access_profile_ref', ref) != ref or original_profile.get('id', 'public') != ref:
             raise AccessDenied('Handoff access profile does not match the current mission')
-        mission, profile, additions = _session_policy(mission, original_profile)
+        mission, profile, additions = _session_policy(mission, original_profile, safe_checkpoint(h.get('checkpoint_url')))
         checkpoint = safe_checkpoint(h.get('checkpoint_url'))
         if not checkpoint:
             raise AccessDenied('A persisted HTTP(S) checkpoint is required')
@@ -153,7 +137,7 @@ def create_desktop_router(engine):
         try:
             from .operator_access import attachment_mission
             attachment_scope, scope_basis = attachment_mission(job, h)
-            mission_copy, profile_copy, additions = _session_policy(attachment_scope, profile)
+            mission_copy, profile_copy, additions = _session_policy(attachment_scope, profile, checkpoint)
             if issue_checkpoint_identity(checkpoint):
                 mission_copy['desktop_issue_checkpoint'] = checkpoint
             # This includes access-profile bounds, DNS/private-address checks, and

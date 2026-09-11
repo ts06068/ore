@@ -6,6 +6,7 @@ import { Empty, ErrorNotice, Field, Logo, Spinner, Status } from './components/C
 import MissionForm from './components/MissionForm';
 import ChatView from './components/ChatView';
 import ConversationLibrary from './components/ConversationLibrary';
+import {isHistoricalHandoff} from './lib/conversation';
 import JobDetail from './components/JobDetail';
 import BrowserView from './components/BrowserView';
 import RunesView from './components/RunesView';
@@ -30,7 +31,7 @@ export default function App(){
  function openPath(path:string,push=true){if(push)history.pushState({},'',path);const route=routeFromPath(path);setView(route.view);setConversationId(route.view==='chat'?route.id:'');setSelected(route.view==='missions'?route.id:'');setHandoffId(route.view==='handoffs'?route.id:'');setMobileNav(false);}
  useEffect(()=>{if(!mobileNav)return;const sidebar=document.querySelector<HTMLElement>('.sidebar');sidebar?.querySelector<HTMLButtonElement>('button')?.focus();const close=(event:KeyboardEvent)=>{if(event.key==='Escape'){setMobileNav(false);document.querySelector<HTMLButtonElement>('.mobile-menu')?.focus();}if(event.key==='Tab'&&sidebar){const nodes=[...sidebar.querySelectorAll<HTMLElement>('button,input,summary,a')].filter(node=>node.getClientRects().length>0&&!node.hasAttribute('disabled'));const first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}};document.addEventListener('keydown',close);return()=>document.removeEventListener('keydown',close);},[mobileNav]);
  useEffect(()=>{const changed=()=>openPath(location.pathname,false);window.addEventListener('popstate',changed);return()=>window.removeEventListener('popstate',changed);},[]);
- useEffect(()=>{if(!authenticated)return;let alive=true;const poll=()=>client.handoffs().then(rows=>{if(alive)setHandoffCount(rows.length);}).catch(()=>undefined);void poll();const timer=setInterval(()=>void poll(),5000);return()=>{alive=false;clearInterval(timer);};},[client,authenticated]);
+ useEffect(()=>{if(!authenticated)return;let alive=true;const poll=()=>client.handoffs().then(rows=>{if(alive)setHandoffCount(rows.filter(row=>!isHistoricalHandoff(row)).length);}).catch(()=>undefined);void poll();const timer=setInterval(()=>void poll(),5000);return()=>{alive=false;clearInterval(timer);};},[client,authenticated]);
  useEffect(()=>{let alive=true;void client.health().then(value=>{if(alive)setServerVersion(value.version??'');}).catch(()=>{if(alive)setServerVersion('');});return()=>{alive=false;};},[client,authenticated]);
  const refreshConversations=useCallback(async()=>{setConversations(await client.conversations());},[client]);
  useEffect(()=>{if(!authenticated)return;void refreshConversations().catch(()=>undefined);const timer=setInterval(()=>void refreshConversations().catch(()=>undefined),10000);return()=>clearInterval(timer);},[authenticated,refreshConversations]);
