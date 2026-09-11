@@ -174,10 +174,33 @@ from ore.desktop import DesktopRuntime
 assert DesktopRuntime.__name__ == 'DesktopRuntime'
 assert ore_scholarly.list_sources()
 assert ore_scholarly.list_runes()
+# Scholarly browser contexts must survive wheel installation; a core-only runtime
+# cannot verify EHJ archive access or supply its packaged frame dependencies.
+from copy import deepcopy
+from ore.native_scope import journal_browser_context, native_scope_copy
+mission = {'goal': 'Download all EHJ June 2024 articles', 'allowed_origins': [],
+    'scope': {'journal_id': 'ehj', 'article_types': 'all'},
+    'publication_window': {'from': '2024-06-01', 'until_exclusive': '2024-07-01'},
+    'artifact_roles': ['main_pdf', 'supplement'], 'completeness': 'systematic'}
+profile = {'id': 'public', 'principal_id': 'operator'}
+original = deepcopy((mission, profile))
+for path in ('/eurheartj/issue-archive', '/eurheartj/issue-archive/2024'):
+    checkpoint = 'https://academic.oup.com' + path
+    context = journal_browser_context(checkpoint)
+    assert context['protocol_id'] == 'journal.ehj' and context['digest']
+    assert context['success_text'] == ['European Heart Journal', 'Oxford Academic']
+    assert 'https://challenges.cloudflare.com' in context['support_origins']
+    copied, access = native_scope_copy(mission, profile, checkpoint)
+    assert copied['desktop_success_text'] == context['success_text']
+    assert copied['allowed_origins'] == ['https://academic.oup.com', 'https://challenges.cloudflare.com']
+    for field in ('scope', 'publication_window', 'artifact_roles', 'completeness'):
+        assert copied[field] == mission[field], 'Packaged browser context changed collection criteria'
+    assert access['id'] == profile['id'] and access['principal_id'] == profile['principal_id']
+assert (mission, profile) == original
 from ore.capabilities import CapabilityRegistry
 from ore.conversation import ConversationManager
 from ore.workflow import WorkflowManager
-print(json.dumps({'ore_engine': version('ore-engine'), 'ore_scholarly': version('ore-scholarly'), 'packaged_ui': True}))
+print(json.dumps({'ore_engine': version('ore-engine'), 'ore_scholarly': version('ore-scholarly'), 'packaged_ui': True, 'scholarly_browser_context': True}))
 '''
         smoke = json.loads(run([str(python), '-c', code], temporary, capture=True))
         run([str(ore), '--help'], temporary)
