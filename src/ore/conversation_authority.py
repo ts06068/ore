@@ -9,11 +9,12 @@ from .models import Budget, canonical_digest
 from .source_policy import HOSTS, normalize_source_policy
 
 
-# These write only job-local state/artifacts or use already configured read access.
-# Browser form actions and account/connection mutations require separate authority.
+# Collection may navigate and interact with its approved source browser, including
+# reserved verification attempts; browser policy and ownership checks still apply.
+# Provider forms, account/connection changes, and purchases require separate authority.
 COLLECTION_TOOLS = {"download", "resource", "inventory", "artifact_commit", "extract", "archive_expand",
                     "page_extract", "seal_issue", "seal_article", "content.write", "code.register", "code.run",
-                    "challenge", "handoff", "scholarly.archive_inventory"}
+                    "browser_action", "challenge", "handoff", "scholarly.archive_inventory"}
 CONSEQUENTIAL = re.compile(r"\b(sign\s*up|register\s+(?:an?\s+)?account|create\s+(?:an?\s+)?account|purchase|pay\s+for|change\s+(?:my\s+)?password)\b|회원가입|계정\s*생성|결제|비밀번호\s*변경", re.I)
 
 

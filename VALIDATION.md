@@ -4,8 +4,9 @@
 
 - Full initial Python regression: **979 passed** in 309.43 seconds; one dependency deprecation warning. Final issue-checkpoint and scope audit: **90 passed**.
 - Web: **140 tests passed**, production build passed; SDK: **16 tests passed**; wheel/sdist/core-only/Claude-extra/npm clean installation passed.
-- Installed wheel: **77 Python modules match the source checkout**. Four candidate API routes passed.
+- Installed rc3 wheel before the authority correction: **78 Python modules match the source checkout**. Four candidate API routes passed.
 - Running service: **0.6.0rc3** on port 8765, all **54 existing jobs** and prior chat/plan records preserved. The original EHJ request was repaired in its same approved envelope, retaining seven operation receipts, the old native session, eight challenge records, both existing messages and consumed budget. A transparent assistant maintenance message was added.
+- Collection browser-input authority: **26 tests passed**, including a host-created envelope, reserved browser click through `recipe.execute`, explicit permission narrowing and separate account authority. The legacy mock authority fixture was also corrected and passed.
 - Installed chat browser check: history separated from current requests, old planning request has no collection-resume control, no page errors.
 
 Evidence: `.ore/releases/0.6.0rc3/`, `.ore/ehj-recovery/ui-installed.json`, `.ore/ehj-recovery/native/20260911T073915Z-72001a/reports/desktop-diagnosis.json`. The original collection then selected native Chrome correctly but inherited the expired planning-stage challenge deadline. The separate operator retry path addresses that stale allocation without granting the agent an automatic reset.

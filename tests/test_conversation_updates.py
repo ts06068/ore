@@ -117,6 +117,9 @@ async def test_timeout_reports_last_validation_and_preserves_previous_plan(setup
 
 async def test_new_execute_chat_uses_operator_request_authority_not_model_goal(setup):
     engine, manager = setup
+    original_catalog = engine.capabilities.catalog
+    engine.capabilities.catalog = lambda: original_catalog() + [
+        {'name': 'browser_action', 'read_only': False}, {'name': 'provider_form', 'read_only': False}]
     ident = manager.create({'mode': 'execute'})['id']
     engine.backend.responses = [decision('propose_plan', **plan('MODEL CHANGED GOAL'))]
     result = await turn(manager, ident, 'Extract a table from https://example.org/source')
@@ -125,7 +128,8 @@ async def test_new_execute_chat_uses_operator_request_authority_not_model_goal(s
     proposed = result['plans'][0]
     assert proposed['mission']['goal'] == 'Extract a table from https://example.org/source'
     assert proposed['goal'] == proposed['mission']['goal']
-    assert 'browser_action' not in proposed['constraints']['allowed_tools']
+    assert 'browser_action' in proposed['constraints']['allowed_tools']
+    assert 'provider_form' not in proposed['constraints']['allowed_tools']
     approval = engine.store.get_document('conversation.approval', result['active_plan_id'])
     assert approval['authority'] == 'operator_request_envelope'
     assert approval['request_envelope_digest'] == proposed['request_envelope_digest']

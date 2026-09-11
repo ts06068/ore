@@ -6,6 +6,8 @@ A confirmed fallback-capable HTTP 403 returns to the same native agent for anoth
 
 A resumed workflow task can reclaim its previous browser only within the same job, node, revision and access identity, after human control and pending approvals are resolved. A deployment that changes native tool schemas still requires a compatible plan repair; old provider sessions are never silently relabeled.
 
+Automatic collection authority now includes ordinary `browser_action` input. Previously ORE could reserve a verification attempt while its own capability envelope rejected the subsequent click. Explicit tool restrictions still narrow permissions, and account/provider forms remain separately authorized. A regression exercises the host-created envelope through an actual reserved browser action and a completed workflow.
+
 An expired shared challenge can be retried only through the authenticated operator request action. The prior episode is archived; one attempt and 120 seconds are allocated to that execution job, with adaptation disabled. If its native desktop was lost, ORE restores the original authorized checkpoint before starting the new clock. The agent has no tool for renewing this allocation, and a browser restart alone never resets it.
 
 New native desktops receive a configurable 4 GiB memory budget. Chrome's optional local model component is disabled. Expected negative DNS probes no longer break diagnostic logging. Access verification requires the actual target page; known issue checkpoints also require the observed journal, volume and issue.
