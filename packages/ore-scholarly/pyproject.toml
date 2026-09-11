@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ore-scholarly"
-version = "0.2.0rc2"
+version = "0.2.0rc3"
 description = "Scholarly source adapters and versioned journal Rune packs for ORE"
 readme = "README.md"
 requires-python = ">=3.12"

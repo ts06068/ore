@@ -154,6 +154,7 @@ class MessageInput(BaseModel):
     reasoning_effort: str | None = None
     routing: dict[str, Any] | None = None
     backend: dict[str, Any] | None = None
+    access_profile_ref: str | None = Field(default=None, min_length=1, max_length=128)
     change_and_continue: bool = False
     affected_node_ids: list[str] | None = None
 
@@ -619,12 +620,50 @@ class ConversationManager(ConversationLibrary):
                     "requested": True, "acknowledged": False, "code": "api_provider_acknowledgement_unavailable"}))
             self._apis.pop(ident, None)
 
+    async def _connection_message(self, ident, request, intent):
+        from .connection_intent import connect_from_chat
+        record, _ = self._read(ident)
+        content = request["content"]
+        if intent['contains_credentials']:
+            content = 'Connect ' + ', '.join(intent['providers']) + ' (credential values omitted; use protected fields).'
+        user = self._message(ident, 'user', content, change_and_continue=False, connection_setup=True)
+        if record['title'] == 'New conversation':
+            self._mutate(ident, lambda value: value.update(title=content.strip()[:80]))
+        setup_record = copy.deepcopy(record)
+        if request.get('access_profile_ref'):
+            setup_record['settings'].setdefault('constraints', {})['access_profile_ref'] = request['access_profile_ref']
+        if request.get('backend', {}).get('kind') in {'codex', 'claude_code'}:
+            setup_record['settings']['backend'] = request['backend']
+            if request.get('model'):
+                setup_record['settings']['model'] = request['model']
+        cards, notes = await connect_from_chat(self, setup_record, intent)
+        summary = 'Connection steps are available below. ' + ' '.join(notes)
+        if intent['contains_credentials']:
+            summary += ' The credential values were omitted from history. Enter them in the protected connection fields.'
+        response = {'id': str(uuid.uuid4()), 'role': 'assistant', 'content': summary,
+                    'status': 'complete', 'sequence': 0, 'created_at': _now(),
+                    'operator_message_id': user['id'], 'connection_setup': True}
+        def update(value):
+            # Do not finish an active planner stream or replace its execution request.
+            value['messages'].append(response)
+            self._append_event(value, 'message', response)
+            self._append_event(value, 'progress', {'phase': 'connection', 'summary': summary,
+                'connection_ids': [card['id'] for card in cards], 'operator_message_id': user['id']})
+        self._mutate(ident, update)
+        return self.get(ident)
+
     async def message(self, ident, values):
         request = MessageInput.model_validate(values).model_dump(exclude_none=True)
         if not request["content"].strip():
             raise ValueError("Message must not be blank")
         async with self._lock(ident):
             self._read(ident)
+            from .connection_intent import connection_setup_intent
+            intent = connection_setup_intent(request["content"])
+            if request.get('access_profile_ref'):
+                self.engine.profile({'access_profile_ref': request['access_profile_ref']})
+            if intent and getattr(self.engine, 'connections', None):
+                return await self._connection_message(ident, request, intent)
             await self._cancel_planner(ident)
             await self._retry_planner_interrupt(ident)
             before, _ = self._read(ident)
@@ -633,6 +672,15 @@ class ConversationManager(ConversationLibrary):
                 self._event(ident, "backend.changed", {"provider": request["backend"].get("kind", "codex"),
                             "message": "The next plan uses the selected provider; existing runs retain their approved provider."})
             def update(record):
+                if request.get('access_profile_ref'):
+                    constraints = record['settings'].setdefault('constraints', {})
+                    previous = constraints.get('access_profile_ref') or constraints.get('access_profile') or 'public'
+                    constraints['access_profile_ref'] = request['access_profile_ref']
+                    constraints.pop('access_profile', None)
+                    if previous != request['access_profile_ref']:
+                        record.update(planning_job_id=None, context=[])
+                        self._append_event(record, 'profile.changed', {'access_profile_ref': request['access_profile_ref'],
+                            'summary': 'The next request uses the selected access profile. Existing runs keep their approved profile.'})
                 for key in ("mode", "model_policy", "model", "reasoning_effort", "routing", "backend"):
                     if key in request:
                         record["settings"][key] = request[key]
@@ -672,7 +720,9 @@ class ConversationManager(ConversationLibrary):
             constraints = copy.deepcopy(settings.get("constraints", {}))
             # Only operator-provided restrictions enter this scope. Source results cannot
             # widen it. Empty origins retain the existing public-source admission policy.
-            mission = Mission.model_validate({**constraints, "goal": record["messages"][-1]["content"],
+            mission = Mission.model_validate({**constraints, "goal": (record.get("last_planner_request") or {}).get("content") or next(
+                (message["content"] for message in reversed(record["messages"])
+                 if message.get("role") == "user" and not message.get("connection_setup")), "Plan this request"),
                                               "artifact_roles": [], "completeness": "bounded",
                                               "budget_scope_id": record.get("planning_budget_scope_id"),
                                               "budget": {"max_turns": 12, "max_seconds": 300,
@@ -1105,8 +1155,8 @@ class ConversationManager(ConversationLibrary):
                 failure = {"code": "planner_timeout", "message": "Planning reached its time limit. Your conversation and previous plan are preserved.",
                            "last_validation": last_validation, "action": "Resume planning or correct the indicated field."}
             else:
-                failure = {"code": exc.code if isinstance(exc, BudgetExhausted) else type(exc).__name__,
-                           "message": "The planner could not complete this turn. Your conversation and previous plan are preserved."}
+                from .conversation_errors import planner_failure
+                failure = planner_failure(exc)
             self._event(ident, "error", failure)
             self._status(ident, "error")
         finally:

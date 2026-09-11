@@ -7,11 +7,14 @@ class Action(BaseModel):
 
 def schema(name,**fields):return create_model(name,__base__=Action,**fields)
 
+ProviderFieldBinding=schema('ProviderFieldBinding',target=(int,Field(ge=0,le=511)),value_ref=(Literal['username','password','mfa_code','given_name','family_name','affiliation','application_name','website'],...))
+
 ACTION_MODELS={
  'state':schema('State'),
  'browser_open':schema('BrowserOpen',url=(str|None,None)),
  'browser_observe':schema('BrowserObserve',session_id=(str,...)),
  'browser_action':schema('BrowserAction',session_id=(str,...),action=(Literal['navigate','click','type','key','scroll','wait','tab','back'],...),epoch=(int,...),url=(str|None,None),target=(int|None,None),selector=(str|None,None),x=(float|int|None,None),y=(float|int|None,None),text=(str|None,None),key=(str|None,None),deltaY=(float|int|None,None),deltaX=(float|int|None,None),index=(int|None,None),seconds=(float|int|None,None)),
+ 'provider_form':schema('ProviderForm',operation=(Literal['inspect','fill','propose_fill','propose_click','capture_key'],...),session_id=(str,...),epoch=(int,Field(ge=1)),url=(str|None,None),form_fingerprint=(str|None,None),fields=(list[ProviderFieldBinding]|None,Field(default=None,min_length=1,max_length=16)),target=(int|None,Field(default=None,ge=0))),
  'search':schema('Search',source=(str,...),query=(str,...),query_mode=(Literal['plain','native']|None,None),year_from=(int|None,None),year_to=(int|None,None),journals=(list[str]|None,None),limit=(int,Field(default=20,ge=1,le=200)),cursor=(str|None,None)),
  'resolve':schema('Resolve',source=(Literal['pmc','unpaywall'],...),identifier=(str,...)),
  'fetch':schema('Fetch',url=(str,...)),

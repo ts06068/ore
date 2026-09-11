@@ -23,7 +23,7 @@ def request_envelope(record, request, message_id, catalog, profile):
         return None
     # User message history is the trusted task specification. Assistant summaries,
     # retrieved documents and provider proposals cannot add authority to it.
-    messages = [{"id": row["id"], "content": row["content"]} for row in record["messages"] if row["role"] == "user"]
+    messages = [{"id": row["id"], "content": row["content"]} for row in record["messages"] if row["role"] == "user" and not row.get("connection_setup")]
     goal = "\n\n".join(row["content"] for row in messages)
     constraints = copy.deepcopy(settings.get("constraints", {}))
     urls = []

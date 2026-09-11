@@ -22,6 +22,7 @@ TOOLS = {
  'browser_open': 'Create a dedicated browser. Arguments: {url?:str}. Returns session_id, screenshot and available text; desktop_chrome has OCR, no DOM.',
  'browser_observe': 'Observe browser screenshot and available text; desktop_chrome has OCR, no DOM. Arguments: {session_id:str}.',
  'browser_action': 'Operate browser. Arguments: {session_id:str,epoch:int,action:navigate|click|type|key|scroll|wait|tab|back,url?:str,target?:integer,selector?:str,x?:number,y?:number,text?:str,key?:str,deltaY?:number,index?:integer}. Use target indices from latest observation.',
+ 'provider_form': 'Inspect or prepare provider setup forms. Only provider_setup workflows. Pass operation inspect with session_id and epoch; then use observed url+form_fingerprint for fill (fields:[{target,value_ref}]), propose_fill, propose_click(target) or capture_key(target). Values are stored host-side; never put credentials or identity values in tool arguments. Clicks and key capture require review in the connection card.',
  'search': 'Query a configured scholarly database. Scopus defaults to plain phrase text; set query_mode=native only for Scopus field syntax such as TITLE-ABS-KEY or DOCTYPE. Arguments: {source:str,query:str,query_mode?:plain|native,year_from?:int,year_to?:int,journals?:list,limit?:int,cursor?:str}. Persist returned records and cursor evidence.',
  'resolve': 'Find accessible main/attachment candidates for a known identifier. Arguments: {source:unpaywall|pmc,identifier:str}.',
  'fetch': 'Fetch an allowed URL and return text/links with provenance. Arguments: {url:str}.',
@@ -204,6 +205,10 @@ class ToolRuntime:
     async def _execute(self,name,args,job,mission):
         e=self.engine;s=e.store;profile=e.profile(mission)
         if name=='state':
+            if mission.get('operator_access', {}).get('purpose') == 'provider_setup' and getattr(e, 'provider_enrollment', None):
+                for session in getattr(e.browser, 'sessions', {}).values():
+                    if not session.closed and session.job_id == self.job_id:
+                        await e.provider_enrollment.rebind(self, session)
             if e.execution.enabled:
                 browsers=await e.execution.task_sessions(self.job_id,self.task['id'] if self.task else None)
             else:
@@ -214,6 +219,12 @@ class ToolRuntime:
             return {'job':job,'resources':s.resources(self.job_id),'artifacts':s.artifacts(self.job_id),
                     'tasks':s.tasks(self.job_id) if hasattr(s,'tasks') else [],'audit':e.audit(self.job_id),
                     'coverage':self.coverage_state(),'retrieval_plan':retrieval_plan(mission,profile),'browsers':browsers,'handoffs':handoffs[:20]}
+        if name=='provider_form':
+            manager = getattr(e, 'provider_enrollment', None)
+            if manager is None:
+                from .provider_enrollment import ProviderEnrollment
+                manager = e.provider_enrollment = ProviderEnrollment(e)
+            return await manager.tool(self, args)
         if name=='browser_open':
             session=await e.browser.create(self.job_id,mission,profile,agent_id=self.actor_id)
             if args.get('url'):return await e.browser.action(session.id,'navigate',args,owner_id=self.actor_id)
@@ -221,7 +232,11 @@ class ToolRuntime:
         if name in ('browser_observe','browser_action'):
             session=e.browser.get(args['session_id'])
             if session.job_id!=self.job_id:raise AccessDenied('Browser belongs to another job')
+            if mission.get('operator_access', {}).get('purpose') == 'provider_setup' and getattr(e, 'provider_enrollment', None):
+                await e.provider_enrollment.rebind(self, session)
             if self.actor_id and session.agent_id!=self.actor_id:raise AccessDenied('Browser belongs to another agent task')
+            if name=='browser_action' and getattr(session, 'enrollment_pending', None):
+                raise AccessDenied('Review the pending provider form action before changing this browser')
             if name=='browser_observe':return await e.browser.observe(session.id,owner_id=self.actor_id)
             return await e.browser.action(session.id,args['action'],args,owner_id=self.actor_id)
         if name in ('search','resolve'):

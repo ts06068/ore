@@ -1,5 +1,7 @@
 # ORE 0.6.0rc1: chat, connections and recovery
 
+This is the historical rc1 release record. See [0.6.0rc2](release-0.6-rc2.md) for the current chat setup, source validation and recovery changes.
+
 The JACC follow-up planner failure came from a descriptive `constraints.sources` string replacing a valid `mission.sources` list. The planner now retains that description separately, validates typed execution fields, and permits at most two targeted corrections. User-supplied invalid constraints remain errors. Failed turns preserve the previous plan and return a public error code and recovery instruction.
 
 The exact two-turn JACC reproduction succeeded with actual Codex: 108.65 seconds for the original request and 108.15 seconds for the Scopus follow-up. Both produced reviewable plans, and the latter retained `sources=["scopus"]` and `official_first`. This Plan-mode check created no collection run and is not evidence that the articles were downloaded. Evidence: `.ore/v06-acceptance/planner-jacc-20260911T011437Z/planner-result.json`.
@@ -8,7 +10,7 @@ The exact two-turn JACC reproduction succeeded with actual Codex: 108.65 seconds
 
 New conversations default to Execute; Plan remains available. Automatic execution binds the plan to a host-created envelope containing the actual user request, selected access profile, source policy, provider, capabilities and budget. A model cannot approve its own scope, increase the budget, switch to a paid provider or introduce credentials. Changes requiring authority remain reviewable in the chat.
 
-Folders support nesting, renaming, moving and deletion. Branching from a message copies the public conversation prefix and selected settings, with a new provider context. Active runs, approvals and credential values are not copied. Existing conversations retain their previous execution policy.
+Purpose folders provide one level of grouping with renaming, moving and deletion; they do not implement arbitrary folder nesting. Conversation branches can show nested parent/child lineage. Branching from a message copies the public conversation prefix and selected settings, with a new provider context. Active runs, approvals and credential values are not copied. Existing conversations retain their previous execution policy.
 
 Connection cards are persisted with the conversation. Login and secret entry use separate protected controls rather than normal messages. Bootstrap does not require a working LLM. A source whose approval is pending is visibly unavailable and can be excluded from the current request; its pending application is retained.
 

@@ -149,7 +149,7 @@ async def test_source_agent_plan_scopes_tools_and_waits_for_model_auth(api):
     job = engine.store.get_job(run['job_id'])
     assert job['mission']['allowed_origins'] == ['https://developer.clarivate.com']
     assert job['mission']['budget']['max_turns'] == 12
-    assert set(job['mission']['allowed_capabilities']) == {'state','browser_open','browser_observe','browser_action','handoff'}
+    assert set(job['mission']['allowed_capabilities']) == {'state','browser_open','browser_observe','browser_action','provider_form','handoff'}
     assert 'terms' in engine.workflows.nodes(run['id'])[0]['spec']['goal']
     engine.workflows.start_run.assert_awaited_once()
     assert engine.backend.calls == []

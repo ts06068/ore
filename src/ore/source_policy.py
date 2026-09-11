@@ -122,7 +122,8 @@ def source_readiness(source, operation, profile=None):
     configured = True
     if entry and operation in ('search', 'resolve'):
         for name, env in entry.get('credentials', {}).items():
-            configured &= bool(config.get(name + '_ref') or os.environ.get(config.get(name + '_env', env)))
+            pool_configured = name == 'api_key' and any(isinstance(item, dict) and item.get('enabled') is not False and item.get('api_key_ref') for item in config.get('credential_pool', []) or [])
+            configured &= bool(config.get(name + '_ref') or pool_configured or os.environ.get(config.get(name + '_env', env)))
     saved = deepcopy(profile.get('source_readiness', {}).get(source, {}).get(operation, {}))
     state = saved.get('state', 'unknown' if configured else 'unconfigured')
     if not supported:

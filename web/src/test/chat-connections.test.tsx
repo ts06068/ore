@@ -31,3 +31,29 @@ it.each([['https://auth0.openai.com/codex/device',true],['https://auth0.openai.c
 it('renders the official Claude login expiry supplied as epoch seconds',async()=>{
  const h=setup({...initial,provider:'claude_code',kind:'model',credential_fields:[],actions:[],verification_url:'https://claude.ai/oauth/authorize',expires_at:1800000000});render(view(h.client));await screen.findByRole('article',{name:'Claude Code connection'});const expiry=screen.getByText(/^Expires /);expect(expiry).not.toHaveTextContent('—');expect(expiry).toHaveTextContent(new Date(1800000000*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}));
 });
+
+
+it.each([['crossref','email','contact@example.test'],['scienceon','client_id','test-client'],['scienceon','token','test-token'],['scopus','insttoken','test-institution-token']])('accepts the registry-declared %s %s field through protected entry',async(provider,field,value)=>{
+ const h=setup({...initial,provider,credential_fields:[field],actions:[]});const user=userEvent.setup();render(view(h.client));
+ await user.click(await screen.findByText('Enter a credential securely'));const input=screen.getByRole('article',{name:new RegExp('connection$')}).querySelector('input')!;await user.type(input,value);await user.click(screen.getByRole('button',{name:'Save credential'}));
+ await waitFor(()=>expect(h.calls.find(call=>call.path.endsWith('/secret'))?.body).toMatchObject({field,value}));expect(input).toHaveValue('');expect(document.body.textContent).not.toContain(value);expect(JSON.stringify(localStorage)).not.toContain(value);
+});
+
+
+it('saves a named source key through the protected endpoint without claiming extra quota',async()=>{
+ const h=setup({...initial,credential_pool_allowed:true,credential_pool:[{id:'primary',enabled:true}]});const user=userEvent.setup();render(view(h.client));await user.click(await screen.findByText('Enter a credential securely'));
+ const keyLabel=screen.getByLabelText('Key label for Scopus');expect(keyLabel).toHaveValue('primary');await user.clear(keyLabel);await user.type(keyLabel,'licensed-secondary');await user.type(screen.getByLabelText('Scopus Api Key'),'private-source-key');await user.click(screen.getByRole('button',{name:'Save credential'}));
+ await waitFor(()=>expect(h.calls.find(call=>call.path.endsWith('/secret'))?.body).toMatchObject({field:'api_key',value:'private-source-key',credential_id:'licensed-secondary'}));
+ expect(screen.getByText('Choose a label to add or replace a saved key. Keys share the provider’s allowance; adding keys does not increase that allowance.')).toBeInTheDocument();expect(document.body.textContent).not.toContain('private-source-key');expect(keyLabel).toHaveValue('licensed-secondary');
+});
+
+it('does not offer multiple PubMed keys even if an older server advertises a pool',async()=>{
+ const h=setup({...initial,provider:'pubmed',credential_pool_allowed:true});render(view(h.client));await screen.findByRole('article',{name:'Pubmed connection'});expect(screen.queryByLabelText('Key label for Pubmed')).not.toBeInTheDocument();
+});
+
+
+it('verifies a configured source API from its chat card using a versioned action',async()=>{
+ const h=setup({...initial,status:'needs_verification',actions:['verify'],configured_fields:['api_key'],message_code:'setup_complete_verify_connection'});const user=userEvent.setup();render(view(h.client));
+ expect(await screen.findByText('Setup is complete. Verify the API to check whether collection is available.')).toBeInTheDocument();await user.click(screen.getByRole('button',{name:'Verify API'}));
+ await waitFor(()=>expect(h.calls.find(call=>call.path.endsWith('/actions'))?.body).toMatchObject({action:'verify',expected_version:1,idempotency_key:expect.any(String)}));expect(h.calls.some(call=>call.path.includes('/messages')||call.path.endsWith('/secret'))).toBe(false);
+});

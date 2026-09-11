@@ -5,7 +5,7 @@ from .resolvers import RESOLVERS
 from .searchers import SEARCHERS
 from .packs import load_rune, list_runes
 
-__version__ = "0.2.0rc2"
+__version__ = "0.2.0rc3"
 __all__ = ["ScholarlyError", "list_sources", "search", "resolve", "load_rune", "list_runes", "normalize_article_version"]
 
 

@@ -175,6 +175,10 @@ class BrowserManager:
         self.start_lock, self.profile_lock, self.create_lock = asyncio.Lock(), asyncio.Lock(), asyncio.Lock()
 
     async def _emit(self, job_id, kind, payload):
+        from .provider_enrollment import is_setup, redact_setup
+        for session in self.sessions.values():
+            if session.job_id == job_id and is_setup(session):
+                payload = redact_setup(session, payload, self.secrets)
         if self.on_event:
             result = self.on_event(job_id, kind, redact(payload))
             if inspect.isawaitable(result):
@@ -395,6 +399,9 @@ class BrowserManager:
         context.on("requestfailed", lambda request: self._launch_observer(session, "requestfailed", request_failed, request))
 
         async def download(item):
+            from .provider_enrollment import block_setup_download
+            if await block_setup_download(self, session, item):
+                return
             path = self.settings.state_dir / "staging" / uuid.uuid4().hex
             path.parent.mkdir(parents=True, exist_ok=True)
             value = {"filename": item.suggested_filename, "url": item.url, "session_id": sid,
@@ -579,7 +586,7 @@ class BrowserManager:
             title = await session.page.title()
         except Exception:
             title = ""
-        return {"id": session.id, "session_id": session.id, "job_id": session.job_id,
+        value = {"id": session.id, "session_id": session.id, "job_id": session.job_id,
                 "url": session.page.url, "title": title, "control": session.control,
                 "epoch": session.epoch, "width": 1280, "height": 800,
                 "challenge_id": session.challenge_id, "termination_unconfirmed": session.closing and not session.closed,
@@ -591,6 +598,11 @@ class BrowserManager:
                     "request_failures": list(session.network_failures), "responses": list(session.response_diagnostics),
                     "callback_errors": list(session.observer_errors),
                     "request_grants":list(session.request_timings),"browser_resource_min_interval_seconds":session.resource_interval}}
+        from .provider_enrollment import is_setup, redact_setup, safe_setup_url
+        if is_setup(session):
+            value.update(title="Provider setup", url=safe_setup_url(session.page.url), network_diagnostics={})
+            value = redact_setup(session, value, self.secrets)
+        return value
 
     async def list(self):
         return [await self.summary(session) for session in self.sessions.values() if not session.closed]
@@ -873,6 +885,9 @@ class BrowserManager:
         session = self.get(sid)
         await self._authorize(session, owner, owner_id=owner_id)
         page = session.page
+        from .provider_enrollment import is_setup, setup_browser_observation
+        if is_setup(session):
+            return await setup_browser_observation(self, session)
         if getattr(session.context, 'desktop', False):
             from .desktop_browser import observe, collect_downloads
             observed = await observe(session)

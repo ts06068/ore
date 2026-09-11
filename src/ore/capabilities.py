@@ -154,7 +154,7 @@ class CapabilityRegistry:
             async def legacy(args, runtime, action=name): return await runtime.execute(action, args)
             self.register(ToolSpec(name, TOOLS[name], model.model_json_schema(), read_only=name in readonly,
                 execution='execution_plane' if name in network else 'coordinator', replay_safe=name in replay,
-                handler_digest=canonical_digest({file:hashlib.sha256((Path(__file__).parent/file).read_bytes()).hexdigest() for file in ('tools.py','contracts.py','vault.py','browser.py')})), legacy)
+                handler_digest=canonical_digest({file:hashlib.sha256((Path(__file__).parent/file).read_bytes()).hexdigest() for file in ('tools.py','contracts.py','vault.py','browser.py', *(['provider_enrollment.py','connection_agent.py'] if name == 'provider_form' else []))})), legacy)
         self.register(ToolSpec('content.select', 'Extract matching HTML elements, text or attributes with CSS selectors. Exact extraction, no model call.',
             object_schema({'html': STRING, 'selector': STRING, 'base_url': STRING, 'attribute': STRING,
                            'fields': {'type': 'object', 'additionalProperties': STRING}, 'text_mode': {'enum': ['raw', 'normalized']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10000}}, ['html', 'selector']),

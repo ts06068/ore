@@ -1,6 +1,32 @@
-# ORE 0.6 functional release — 2026-09-11
+# ORE 0.6.0rc2 validation — 2026-09-11
 
-The installed service on port **8765 is 0.6.0rc1**. All 48 existing jobs and the substantive conversation/plan/handoff/challenge records were preserved at promotion. The main service exposes the new chat, folder, connection and progress routes. This is a functional release; all-four-source completeness and superiority over standalone Codex are not established. [Release behavior](docs/release-0.6.md), [connection contracts](docs/connection-flow-0.6.md), [actual source results](docs/release-0.6-sources.md).
+The running rc2 release adds chat-driven connection setup, protected provider enrollment actions, source-profile propagation, clearer planner errors and nested conversation lineage within purpose folders. [Release behavior](docs/release-0.6-rc2.md), [Korean-source evidence](docs/release-0.6-rc2-sources.md). Candidate implementation, package installation, running-service promotion and live collection are distinct checks; earlier release results below remain historical.
+
+| Check | Current observed result | Evidence |
+| --- | --- | --- |
+| Full Python regression | 910 passed plus 6 subtests in 253.63 seconds; one dependency deprecation warning | `.ore/releases/0.6.0rc2/tests.log` |
+| Web and SDK regression | 133 web tests and 16 SDK tests passed; production build passed | `.ore/releases/0.6.0rc2/build.log` |
+| Browser UI fixtures | 18 checks passed, including connection/form and conversation flows; zero model calls | `web/test-results/ui-v06/report.json` |
+| PDF and scholarly subset | 65 tests plus 6 subtests passed; CI fatal-error lint passed | `tests/test_vault.py`, `tests/test_scholarly.py` |
+| Real JACC June 2024 planner | Six provider turns, 125.20 s, 232,124 observed tokens; one valid plan awaiting approval, zero errors; no collection started | `.ore/reports/planner-desktop-followup.json` |
+| Deliberate planner budget failure | Two turns, 11.32 s, 58,136 tokens against a 50,000-token ceiling; actionable `budget_token_exhausted`, 8,136 in-flight overshoot retained | `.ore/reports/planner-desktop-followup.json` |
+| Original desktop checkpoint | Both JACC previews eligible; origin recovery is scoped to the operator session and preserves challenge accounting | `.ore/reports/planner-desktop-followup.json` |
+| Four-source bounded corpus | PubMed 5 main + 8 attachments; Scopus 5 + 15; KISS 5 + 8; RISS 5 + 3. All 49 unique files independently rehashed and format-checked | `.ore/rc2-completion/corpus-manifest.json`, `corpus-verification.json` |
+| Korean live download/identity | Eight unique main PDFs and eight unique supplementary PDFs verified; a publisher PDF line-wrap mismatch was corrected and live verification completed | `.ore/v06-korean-completion/consolidated-acceptance.json`, `identity-final.json` |
+| Release packages | Core-only/Claude-extra install, CLI, sdist rebuild and clean npm SDK install passed; 72 wheel Python modules match the workspace | `dist/v0.6-rc2/release-manifest.json`, `.ore/releases/0.6.0rc2/package-source-match.json` |
+| Installed candidate | Six checks passed: chat-led Crossref setup without a configured model, protected email field, enrollment routes and a real bounded API check; zero model calls/collection jobs | `.ore/releases/0.6.0rc2/candidate-functional.json` |
+| Running service | Port 8765 runs 0.6.0rc2; 11 installed UI/API checks passed, including all 52 existing progress routes and both legacy JACC desktop previews | `.ore/reports/ui-rc2-installed/report.json` |
+| Deployment preservation | All 52 job rows and prior history preserved; three shutdown acknowledgements, one progress refresh and one authentication handoff were retained as additions | `.ore/releases/0.6.0rc2/deployment.json` |
+
+The four-source archive contains **18 unique main PDFs and 31 supplementary/auxiliary files**, after deduplicating two Korean studies and three shared attachments. Archive: `.ore/reports/ore-four-source-sample-rc2.zip`, **36,223,352 bytes**, SHA-256 `68fe955781632c586dc9ad7651df084143db0d5b9c913a2e8b51a0a541bd1c56`. The 20 source memberships represent 18 different studies. Publisher/PMC evidence supports original-study eligibility and exact phrase matching. PubMed's two inaccessible publisher CDN aliases remain unresolved; corresponding PMC supplements are present, but byte-equivalence is unknown.
+
+Source discovery and later deterministic ORE continuations were operator-assisted. The corpus is a verified bounded sample, not autonomous chat-to-corpus acceptance or a complete JACC month. Enrollment tests cover local DOM form preparation and reviewed effects; they do not prove fresh real-provider account issuance, approval or Claude subscription model execution. Screenshot-only Chrome desktops do not support automatic protected form filling. Provider quotas remain distinct from ORE budgets, and pending operations remain unavailable until verified.
+
+The live planner checks created separate test conversations and reconnaissance jobs. Collection runners wrote isolated state; the final concurrent main-job digest changed during planner validation, while challenge digests remained equal. No claim of a globally unchanged main job table is made for that interval. Historical jobs, failed attempts and the incomplete 0.5 comparison are retained.
+
+# Historical ORE 0.6.0rc1 promotion — 2026-09-11
+
+At this historical promotion, the service on port **8765 was 0.6.0rc1**. All 48 existing jobs and the substantive conversation/plan/handoff/challenge records were preserved at promotion. The main service exposes the new chat, folder, connection and progress routes. This is a functional release; all-four-source completeness and superiority over standalone Codex are not established. [Release behavior](docs/release-0.6.md), [connection contracts](docs/connection-flow-0.6.md), [actual source results](docs/release-0.6-sources.md).
 
 | Check | Observed result | Evidence |
 | --- | --- | --- |

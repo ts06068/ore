@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ore-engine"
-version = "0.6.0rc1"
+version = "0.6.0rc2"
 description = "Protocol-driven retrieval with LLM agents, durable evidence, and remote browser control"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,7 +20,7 @@ dependencies = [
 claude = ["claude-agent-sdk>=0.2.152,<0.3"]
 dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.26,<2", "build>=1.2,<2", "ruff>=0.11,<1"]
 ocr = ["pytesseract>=0.3.13,<1", "pillow>=11,<13"]
-scholarly = ["ore-scholarly>=0.2.0rc2,<0.3"]
+scholarly = ["ore-scholarly>=0.2.0rc3,<0.3"]
 [project.scripts]
 ore = "ore.cli:app"
 [tool.hatch.build.targets.wheel]

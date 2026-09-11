@@ -38,6 +38,7 @@ class ConnectionSecret(BaseModel):
     model_config = ConfigDict(extra='forbid')
     field: str
     value: str = Field(min_length=1, max_length=65536, repr=False)
+    credential_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
     expected_version: int = Field(ge=1)
     idempotency_key: str = Field(pattern=r'^[A-Za-z0-9._:-]{4,120}$')
 
@@ -108,7 +109,17 @@ class ConnectionManager:
         result = {key: row[key] for key in keys if key in row}
         if row.get('linked_job_id'):
             result['job_id'] = row['linked_job_id']
+        from .connection_intent import credential_fields
+        result['credential_fields'] = credential_fields(row['provider'], row['kind'])
         result['configured_fields'] = sorted(row.get('secret_refs', {}))
+        result['credential_pool_allowed'] = row['kind'] == 'source' and row['provider'] != 'pubmed' and 'api_key' in result['credential_fields']
+        if row['kind'] == 'source':
+            profile = self.engine.profile({'access_profile_ref': row['access_profile_ref']})
+            config = profile.get('sources', {}).get(row['provider'], {})
+            entries = config.get('credential_pool') or ([{'id': 'primary'}] if config.get('api_key_ref') else [])
+            result['credential_pool'] = [{'id': item['id'], 'enabled': item.get('enabled') is not False}
+                for item in entries if isinstance(item, dict) and isinstance(item.get('id'), str)]
+
         if row['provider'] in {'openai', 'anthropic'}:
             result['actions'] = ['refresh', 'cancel']
             if row['status'] != 'cancelled' and row.get('secret_refs', {}).get('api_key'):
@@ -128,6 +139,8 @@ class ConnectionManager:
                     result['actions'].append('start_login')
         else:
             result['actions'] = ['open_provider', 'refresh', 'mark_pending', 'cancel', 'request_agent']
+            if row['operation'] == 'search':
+                result['actions'].append('verify')
             for job_id in (row.get('agent_job_id'), row.get('linked_job_id') or row.get('job_id')):
                 if not job_id:
                     continue
@@ -161,11 +174,11 @@ class ConnectionManager:
                     provider, values.get('conversation_id'), operation) and profile['id'] in {
                     existing.get('requested_profile_ref'), existing.get('access_profile_ref')} and existing['status'] != 'cancelled':
                 return self.public(existing)
+        from .connection_intent import credential_fields
         ident = str(uuid.uuid4())
         value = {'id': ident, 'provider': provider, 'kind': kind, 'status': 'not_connected',
                  'conversation_id': values.get('conversation_id'), 'access_profile_ref': profile['id'], 'requested_profile_ref': profile['id'],
-                 'operation': operation, 'credential_fields': (['api_key'] if provider in {'openai', 'anthropic'}
-                    else [] if kind == 'model' else ['username', 'password', 'api_key']),
+                 'operation': operation, 'credential_fields': credential_fields(provider, kind),
                  'secret_refs': {}, 'receipts': {}, 'inflight': None}
         return self.public(self.store.put_document(self.collection, ident, value, expected_version=0))
 
@@ -219,7 +232,7 @@ class ConnectionManager:
 
     async def action(self, ident, body):
         action, key = body['action'], body['idempotency_key']
-        if action not in {'start_login', 'cancel', 'refresh', 'mark_pending', 'open_provider', 'request_agent'}:
+        if action not in {'start_login', 'cancel', 'refresh', 'mark_pending', 'open_provider', 'request_agent', 'verify'}:
             raise ValueError('Unknown connection action')
         async with self.locks.setdefault(ident, asyncio.Lock()):
             row, replay = self._begin(self._read(ident), action, key, body['expected_version'])
@@ -297,6 +310,17 @@ class ConnectionManager:
         if action == 'refresh':
             profile = self.engine.profile({'access_profile_ref': row['access_profile_ref']})
             return {'status': source_readiness(row['provider'], row['operation'], profile)['state']}
+        if action == 'verify':
+            if row['operation'] != 'search':
+                raise AccessDenied('This connection needs a scoped browser or identifier check')
+            from .onboarding import check_source
+            profile = self.engine.profile({'access_profile_ref': row['access_profile_ref']})
+            current = source_readiness(row['provider'], row['operation'], profile)
+            if current['state'] == 'approval_pending' and not current.get('configured'):
+                return {'status': 'approval_pending', 'message_code': 'pending_operation_excluded_from_admission'}
+            result = await check_source(self.engine, self.browser, row['provider'],
+                {'operation': row['operation'], 'access_profile_ref': row['access_profile_ref']})
+            return {'status': result['state'], 'message_code': 'source_operation_checked'}
         if action == 'mark_pending':
             profile = self.engine.profile({'access_profile_ref': row['access_profile_ref']})
             profile.setdefault('source_readiness', {}).setdefault(row['provider'], {})[row['operation']] = {
@@ -318,6 +342,27 @@ class ConnectionManager:
         if action == 'open_provider':
             return {'status': 'awaiting_user'}
         if row.get('workflow_run_id'):
+            run = self.engine.workflows.get_run(row['workflow_run_id'])
+            job = self.engine.store.get_job(run['job_id'])
+            if (job['mission'].get('operator_access', {}).get('purpose') != 'provider_setup'
+                    or job['mission'].get('connection_id') != row['id'] or run['job_id'] != row.get('agent_job_id')
+                    or self.engine.profile(job['mission'])['id'] != row['access_profile_ref']):
+                raise AccessDenied('The existing workflow does not belong to this provider setup')
+            enrollment = getattr(self.engine, 'provider_enrollment', None)
+            pending = enrollment.list(row['id'])['actions'] if enrollment else []
+            if any(item['status'] in {'pending', 'executing', 'uncertain'} for item in pending):
+                return {'status': 'awaiting_user', 'message_code': 'review_provider_form_action_first'}
+            if run['status'] in {'awaiting_user', 'paused'}:
+                if any(item.get('status') == 'unconfirmed' for item in run.get('interruptions', [])):
+                    return {'status': 'cancel_unconfirmed', 'message_code': 'agent_stop_not_confirmed'}
+                if self.engine.handoffs.list(run['job_id'], 'active'):
+                    return {'status': 'awaiting_user', 'message_code': 'complete_reviewed_provider_step'}
+                await self.engine.workflows.resume(run['id'])
+                return {'status': 'agent_requested', 'message_code': 'provider_setup_resumed'}
+            if run['status'] == 'completed':
+                return {'status': 'needs_verification', 'message_code': 'setup_complete_verify_connection'}
+            if run['status'] not in {'queued', 'running', 'pending', 'waiting_children'}:
+                return {'status': run['status'], 'message_code': 'provider_setup_needs_review'}
             return {'status': 'agent_requested'}
         backend = provider_name(body.get('agent_backend', 'codex'))
         if (await self._adapter(backend).auth_status()).get('status') != 'ready':
@@ -335,8 +380,6 @@ class ConnectionManager:
 
     async def store_secret(self, ident, body):
         field, key = body['field'], body['idempotency_key']
-        if field not in {'username', 'password', 'api_key'}:
-            raise ValueError('Unsupported credential field')
         async with self.locks.setdefault(ident, asyncio.Lock()):
             row = self._read(ident)
             api_model = row['kind'] == 'model' and row['provider'] in {'openai', 'anthropic'}
@@ -344,13 +387,31 @@ class ConnectionManager:
                 raise AccessDenied('Model login credentials belong to the official provider CLI')
             if api_model and field != 'api_key':
                 raise AccessDenied('API model connections accept only an API key')
-            action = 'secret:'+field
+            from .connection_intent import credential_fields
+            if field not in credential_fields(row['provider'], row['kind']):
+                raise ValueError('Unsupported credential field for this provider')
+            credential_id = body.get('credential_id')
+            if credential_id and (api_model or field != 'api_key' or row['provider'] == 'pubmed'):
+                raise ValueError('Named key pools are unavailable for this credential')
+            profile = None
+            pool = None
+            if row['kind'] == 'source':
+                profile = self.engine.profile({'access_profile_ref': row['access_profile_ref']})
+                config = profile.get('sources', {}).get(row['provider'], {})
+                if field == 'api_key' and (credential_id or config.get('credential_pool')):
+                    pool = [dict(item) for item in config.get('credential_pool', [])]
+                    if not pool and config.get('api_key_ref'):
+                        pool = [{'id': 'primary', 'api_key_ref': config['api_key_ref']}]
+                    credential_id = credential_id or ('primary' if any(item['id'] == 'primary' for item in pool) else pool[0]['id'])
+                    if len(pool) >= 20 and not any(item['id'] == credential_id for item in pool):
+                        raise ValueError('At most 20 saved keys are supported')
+            action = 'secret:'+field + (':'+credential_id if credential_id else '')
             row, replay = self._begin(row, action, key, body['expected_version'])
             if replay:
                 return self.public(row)
             # Stable private reference makes the vault write repeat-safe, but an
             # interrupted action is not automatically replayed after restart.
-            ref = 'connection/'+ident+'/'+field
+            ref = 'connection/'+ident+'/'+field + ('/'+credential_id if credential_id else '')
             try:
                 self.engine.secrets.set(ref, body['value'])
                 refs = {**row.get('secret_refs', {}), field: ref}
@@ -358,13 +419,26 @@ class ConnectionManager:
                 if api_model:
                     changes['status'] = 'configured_unverified'
                 else:
-                    profile = self.engine.profile({'access_profile_ref': row['access_profile_ref']})
                     if profile['id'] == 'public':
                         profile = {**profile, 'id': 'connection-'+row['provider'], 'name': row['provider']+' connection'}
                     config = profile.setdefault('sources', {}).setdefault(row['provider'], {})
-                    config[field+'_ref'] = ref
+                    if pool is not None:
+                        entry = next((item for item in pool if item['id'] == credential_id), None)
+                        if entry is None:
+                            pool.append({'id': credential_id, 'api_key_ref': ref, 'enabled': True})
+                        else:
+                            entry['api_key_ref'] = ref
+                        config['credential_pool'] = pool
+                        config['api_key_ref'] = next(item['api_key_ref'] for item in pool if item.get('enabled') is not False)
+                    else:
+                        config[field+'_ref'] = ref
+                    readiness = profile.setdefault('source_readiness', {}).setdefault(row['provider'], {})
+                    for operation in ('search', 'resolve'):
+                        if operation in readiness:
+                            readiness[operation] = {'state': 'unknown', 'scope': 'credentials_changed'}
                     self.engine.save_profile(profile)
                     changes['access_profile_ref'] = profile['id']
+                    changes['status'] = 'needs_verification'
                 # Storage never establishes provider entitlement or quota.
                 return self.public(self._finish(ident, action, key, changes))
             except Exception:

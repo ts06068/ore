@@ -15,7 +15,9 @@ def make_pdf(path, text="Study title 10.1234/example"):
     font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")})
     page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})})
     stream = DecodedStreamObject()
-    stream.set_data(f"BT /F1 10 Tf 10 280 Td ({text}) Tj ET".encode())
+    lines = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in text.splitlines()]
+    commands = " 0 -12 Td ".join(f"({line}) Tj" for line in lines)
+    stream.set_data(f"BT /F1 10 Tf 10 280 Td {commands} ET".encode())
     page[NameObject("/Contents")] = writer._add_object(stream)
     with path.open("wb") as output:
         writer.write(output)
@@ -75,6 +77,40 @@ def test_pdf_identity_spacing_fallback_does_not_accept_short_title(tmp_path):
     result = Vault(tmp_path / "vault").commit_file(source, {"role": "main_pdf", "title": "Clinical Trial", "doi": "10.1234/example"})
     assert result["status"] == "needs_review"
     assert result["identity_evidence"]["title_match"] is False
+
+
+LINE_WRAPPED_TITLE = (
+    "Immediate multivessel revascularization may increase cardiac death and myocardial infarction "
+    "in patients with ST-elevation myocardial infarction and multivessel coronary artery disease: "
+    "data analysis from real world practice"
+)
+
+
+@pytest.mark.parametrize("replacement,observed_doi,verified", [
+    ("infarc-\ntion", "10.3904/kjim.2014.119", True),
+    ("infarc- \ntion", "10.3904/kjim.2014.119", True),
+    ("infarc-\ntion", "10.9999/different", False),
+    ("infarc-\ntion", "", False),
+    ("infarc-tion", "10.3904/kjim.2014.119", False),
+    ("ische-\nmia", "10.3904/kjim.2014.119", False),
+])
+def test_pdf_identity_unwraps_line_hyphens_only_with_matching_doi_and_full_title(
+    tmp_path, replacement, observed_doi, verified,
+):
+    # The published title can follow affiliations/abstract, beyond the narrow
+    # spacing-repair header. A different diagnosis must not pass on DOI alone.
+    extracted = LINE_WRAPPED_TITLE.replace("infarction", replacement)
+    source = make_pdf(tmp_path / "wrapped.pdf", "Affiliation " * 200 + "\n" + extracted + "\n" + observed_doi)
+    before = source.read_bytes()
+    result = Vault(tmp_path / "vault").commit_file(source, {
+        "role": "main_pdf", "title": LINE_WRAPPED_TITLE, "doi": "10.3904/kjim.2014.119",
+    })
+    assert (result["status"] == "verified") is verified
+    assert result["identity_evidence"]["title_match"] is verified
+    assert result["identity_evidence"]["title_match_method"] == (
+        "doi_guarded_line_hyphen_exact" if verified else None
+    )
+    assert source.read_bytes() == before
 
 
 def test_login_html_wrong_identity_and_truncated_pdf(tmp_path):

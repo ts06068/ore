@@ -711,7 +711,7 @@ wheels = [
 
 [[package]]
 name = "ore-engine"
-version = "0.6.0rc1"
+version = "0.6.0rc2"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
@@ -789,7 +789,7 @@ provides-extras = ["claude", "dev", "ocr", "scholarly"]
 
 [[package]]
 name = "ore-scholarly"
-version = "0.2.0rc2"
+version = "0.2.0rc3"
 source = { editable = "packages/ore-scholarly" }
 dependencies = [
     { name = "defusedxml" },

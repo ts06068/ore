@@ -127,7 +127,7 @@ def main() -> None:
     with zipfile.ZipFile(engine_wheel) as archive:
         names = archive.namelist()
         assert 'ore/static/index.html' in names, 'Engine wheel is missing the console.'
-        for module in ('claude', 'connections', 'connection_agent', 'provider_auth', 'credentials', 'source_wait', 'conversation_authority', 'conversation_contracts', 'conversation_library', 'conversation', 'conversation_api', 'public_stream', 'progress', 'workflow', 'workflow_adaptation', 'workflow_native', 'workflow_context', 'workflow_completion', 'workflow_recipes', 'agent_sessions', 'recipes', 'run_budget', 'planner_context', 'capabilities', 'sandbox', 'scheduler', 'pool', 'host_pool', 'challenge_policy', 'challenge_service'):
+        for module in ('claude', 'connections', 'connection_agent', 'connection_intent', 'conversation_errors', 'provider_enrollment', 'provider_auth', 'credentials', 'source_wait', 'conversation_authority', 'conversation_contracts', 'conversation_library', 'conversation', 'conversation_api', 'public_stream', 'progress', 'workflow', 'workflow_adaptation', 'workflow_native', 'workflow_context', 'workflow_completion', 'workflow_recipes', 'agent_sessions', 'recipes', 'run_budget', 'planner_context', 'capabilities', 'sandbox', 'scheduler', 'pool', 'host_pool', 'challenge_policy', 'challenge_service'):
             assert f'ore/{module}.py' in names, f'Engine wheel is missing {module}'
         assert 'ore/companion_extension/manifest.json' in names, 'Engine wheel is missing the Chrome companion.'
         assert 'ore/companion_extension/background.js' in names

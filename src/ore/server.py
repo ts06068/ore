@@ -273,6 +273,8 @@ def create_app(engine=None):
     app.include_router(create_companion_router(engine))
     from .connections import create_connection_router
     app.include_router(create_connection_router(engine,browser))
+    from .provider_enrollment import create_provider_enrollment_router
+    app.include_router(create_provider_enrollment_router(engine))
     from .onboarding import create_onboarding_router
     app.include_router(create_onboarding_router(engine,browser))
     if getattr(engine,'execution',None):

@@ -228,6 +228,18 @@ def _pdf_identity(reader: PdfReader, expected: dict[str, Any]) -> tuple[str, dic
             and compact_title in _normal(front[:2_000]).replace(" ", "")):
         title_match = True
         title_match_method = "doi_guarded_spacing_exact"
+    # Typeset words can wrap with a discretionary hyphen later on the first
+    # page, after a column of affiliations or the abstract. Remove only a
+    # letter-to-letter hyphen at a real line break, then require the complete
+    # normalized title and an independently matching DOI. Inline hyphens and
+    # arbitrary spacing keep their existing meaning.
+    unwrapped_front = re.sub(r"(?<=[^\W\d_])-[ \t]*(?:\r\n|\n|\r)[ \t]*(?=[^\W\d_])", "", front[:12_000])
+    if (not title_match and doi_match and len(compact_title) >= 40
+            and len(normalized_title.split()) >= 6
+            and unwrapped_front != front[:12_000]
+            and normalized_title in _normal(unwrapped_front)):
+        title_match = True
+        title_match_method = "doi_guarded_line_hyphen_exact"
     evidence = {"method": "first_page_and_pdf_metadata", "title_match": title_match,
                 "title_match_method": title_match_method,
                 "doi_match": doi_match, "observed_dois": observed_dois[:20]}

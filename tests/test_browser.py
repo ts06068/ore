@@ -336,3 +336,24 @@ async def test_expired_local_reservation_does_not_reset_shared_budget(tmp_path, 
     finally:
         await manager.close()
         store.close()
+
+
+@pytest.mark.browser
+async def test_provider_setup_omits_page_content_and_cancels_download_before_staging(tmp_path, site, browser_dependencies):
+    manager, store, secrets, job, mission = make_manager(tmp_path, site)
+    mission['operator_access'] = {'purpose': 'provider_setup'}
+    try:
+        session = await manager.create(job['id'], mission, {'id': 'setup-fixture', 'allow_private_network': True})
+        observed = await manager.action(session.id, 'navigate', {'url': site})
+        assert observed['text'] == '' and observed.get('image_url') is None
+        assert not any(row.get('kind') == 'browser.page' for row in store.observations(job['id']))
+        await manager.takeover(session.id)
+        await manager.action(session.id, 'click', {'epoch': session.epoch, 'selector': 'a'}, owner='human')
+        if session.download_tasks:
+            await asyncio.gather(*session.download_tasks)
+        assert session.downloads == []
+        assert list((manager.settings.state_dir / 'staging').iterdir()) == []
+        assert not any(row.get('kind') == 'browser.download' for row in store.observations(job['id']))
+    finally:
+        await manager.close()
+        store.close()

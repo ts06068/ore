@@ -1,4 +1,4 @@
-import type {Conversation,ConversationEvent,ConversationMessage,PlanRevision,WorkflowRun} from '@ore/sdk';
+import type {Conversation,ConversationEvent,ConversationMessage,ConversationSummary,PlanRevision,WorkflowRun} from '@ore/sdk';
 import {record,text} from './format';
 
 /** Replay only public response deltas. Provider reasoning never enters this reducer. */
@@ -41,4 +41,21 @@ export function conversationTurns(conversation:Conversation|null,events:Conversa
  for(const event of events){if(['created','message','message.delta','message.complete','clarification','plan.proposed','plan.approved'].includes(event.type))continue;const data=record(event.data);const turn=runOwners.get(text(data.run_id,''))??planOwners.get(text(data.plan_id,''))??owner({...data,operator_message_id:data.operator_message_id??event.operator_message_id,created_at:event.created_at});turn.events.push(event);}
  if(legacy.messages.length||legacy.plans.length||legacy.runs.length||legacy.events.length)turns.unshift(legacy);
  return turns;
+}
+
+export interface ConversationBranch {conversation:ConversationSummary;children:ConversationBranch[];}
+
+/** Build one folder's branch tree; absent parents stay visible as roots. */
+export function conversationBranches(conversations:ConversationSummary[]):ConversationBranch[]{
+ const nodes=new Map(conversations.map(conversation=>[conversation.id,{conversation,children:[]} as ConversationBranch]));
+ const parents=new Map<string,string>();
+ for(const item of conversations){const parent=item.branched_from?.conversation_id;if(parent&&parent!==item.id&&nodes.has(parent))parents.set(item.id,parent);}
+ // Imported or stale lineage must never hide chats in a cycle or recurse forever.
+ for(const id of [...nodes.keys()].sort()){
+  const seen=new Set<string>();let current:string|undefined=id;
+  while(current&&parents.has(current)){if(seen.has(current)){parents.delete(current);break;}seen.add(current);current=parents.get(current);}
+ }
+ const roots:ConversationBranch[]=[];
+ for(const node of nodes.values()){const parent=parents.get(node.conversation.id);if(parent)nodes.get(parent)!.children.push(node);else roots.push(node);}
+ return roots;
 }

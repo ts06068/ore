@@ -12,7 +12,7 @@ ORE is a self-hosted agent runtime for repeatable web retrieval. Describe what y
 
 Use it for general web extraction or scholarly collections, including article PDFs and supplementary files. The Python engine runs the work; the web console and TypeScript SDK provide access to it.
 
-**Status:** `0.6.0rc1` · Install from source; packages have not been published to public registries. See [validation](VALIDATION.md) for tested behavior and remaining gaps.
+**Status:** `0.6.0rc2` · Install from source; packages have not been published to public registries. See [validation](VALIDATION.md) for tested behavior and remaining gaps.
 
 ## Agent architecture
 
@@ -67,7 +67,9 @@ Start a chat, for example:
 
 > Find the original articles in JACC's June 2024 issues. Use the journal website to establish the article list, with Scopus as a fallback. Retrieve the main PDFs and supplements, and report anything missing.
 
-Switch to **Plan** to discuss requirements before approving execution. The chat shows public activity summaries, collected files, progress, measured ETA when available, and requests for input. Use **Stop** to interrupt and **Resume** to continue. Conversations can be grouped into folders and branched.
+Switch to **Plan** to discuss requirements before approving execution. The chat shows public activity summaries, collected files, progress, measured ETA when available, and requests for input. Use **Stop** to interrupt and **Resume** to continue. Conversations can be grouped by purpose; branches appear as a tree in the sidebar.
+
+To connect a service, type **“Connect Codex”**, **“Connect Scopus”**, or **“Request a Scopus API key”** in chat. Connection cards provide official sign-in, protected credentials, API verification and review of proposed enrollment steps. Select the source access profile for the chat before collection. Existing keys and pending applications are reused.
 
 For a repeatable command-line mission:
 
@@ -92,4 +94,4 @@ npm test --prefix web
 uv run python scripts/build_release.py
 ```
 
-Release builds produce Python distributions and an npm SDK tarball under `dist/`. See [Docker deployment](deploy/README.md), [Chrome desktops](docs/desktop-chrome.md), [native agent execution](docs/release-0.5.md), and [current release notes](docs/release-0.6.md) for configuration and implementation details.
+Release builds produce Python distributions and an npm SDK tarball under `dist/`. See [Docker deployment](deploy/README.md), [Chrome desktops](docs/desktop-chrome.md), [native agent execution](docs/release-0.5.md), and [current release notes](docs/release-0.6-rc2.md) for configuration and implementation details.

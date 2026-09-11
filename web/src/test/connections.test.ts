@@ -1,0 +1,6 @@
+import {describe,expect,it} from 'vitest';
+import {isConnectionSetupMessage} from '../lib/connections';
+describe('explicit connection commands',()=>{
+ it.each(['Connect Scopus','Log in to Claude Code','Set up the PubMed search API','OpenAI API 키 발급해줘','Scopus와 PubMed 연결해줘','Register a Clarivate account','Create an API key for Crossref','ChatGPT 로그인','Connect\nScopus','Add an API key for Scopus','Save my PubMed API key','Enter CrossRef API key','PubMed API 키 등록해줘','Crossref 이메일 입력','Log in to ChatGPT API','Connect Claude API','Connect NCBI','Connect Elsevier','Connect Cross-Ref','Connect ChatGPT and Claude API','Connect ChatGPT API and Claude sign in','Connect ChatGPT, Claude API','Connect Codex API'])('recognizes setup: %s',text=>expect(isConnectionSetupMessage(text)).toBe(true));
+ it.each(['Scopus','Find the original articles in JACC’s June 2024 issues with Scopus fallback','Search for cardiac death in PubMed','Connect Scopus and collect five papers','PubMed에서 논문을 찾아줘','Scopus API 연결 후 수집해줘','Read the report about connected systems','Connect ScopusMirror','Connect Scopus '+ 'a'.repeat(2000)])('preserves planner requests: %s',text=>expect(isConnectionSetupMessage(text)).toBe(false));
+});

@@ -105,6 +105,7 @@ async def test_save_profile_keeps_local_baseline_and_reports_conflict_without_re
     manager.profile_lock = asyncio.Lock()
     manager.secrets = SecretStore(tmp_path)
     manager.on_event = None
+    manager.sessions = {}
     original = state([cookie()])
     manager.secrets.set(REF, json.dumps(original))
     current = deepcopy(original)

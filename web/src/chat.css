@@ -17,3 +17,11 @@
 .chat-settings .chat-custom-model{max-width:160px;min-width:100px;min-height:34px;padding:6px 9px;font-size:12px;border-radius:8px;background:var(--surface-subtle);border:1px solid var(--line)}
 .desktop-access-preview{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:10px;font-size:12px;background:var(--surface-subtle)}.desktop-access-preview p{margin:8px 0}.desktop-access-preview ul{padding-left:18px}.desktop-access-preview code{overflow-wrap:anywhere}.desktop-access-preview small{color:var(--muted)}
 .chat-source-wait{margin:12px 0;padding:10px 14px;background:var(--warning-bg);border-radius:9px;color:var(--warning);font-size:12px}.chat-source-wait p{margin:4px 0;line-height:1.6}.planning-field-errors{font-size:12px;color:var(--muted);padding-left:20px}
+
+/* Parent and child chats retain their lineage within each purpose folder. */
+.conversation-branch-list,.conversation-branch-children{list-style:none;margin:0;padding:0;min-width:0}.conversation-branch-children{border-left:1px solid var(--line-strong);margin-left:13px;padding-left:7px}.conversation-branch-children .conversation-branch-children .conversation-branch-children{margin-left:5px;padding-left:4px}.conversation-branch-node{min-width:0}
+
+.connection-registration{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}.connection-registration>summary{font-size:12px;cursor:pointer}.connection-registration form{display:grid;grid-template-columns:1fr 1fr;gap:12px}.connection-registration form button{justify-self:start;grid-column:1/-1}.connection-form-actions{margin-top:18px}.connection-form-actions h3{font-size:13px;margin:0 0 12px}.connection-form-action{border-top:1px solid var(--line);padding:14px 0}.connection-form-action>header{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px}.connection-form-action>a{font-size:12px;overflow-wrap:anywhere;display:block;margin-top:10px;color:var(--focus)}.connection-form-action ul{padding-left:18px;font-size:12px;color:var(--muted)}.connection-form-action>small{display:block;font-size:11px;color:var(--muted);margin-top:12px}
+@media(max-width:640px){.connection-registration form{grid-template-columns:1fr}}
+
+.connection-use-profile{display:flex;align-items:center;flex-wrap:wrap;gap:10px;overflow-wrap:anywhere}
