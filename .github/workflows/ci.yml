@@ -20,8 +20,12 @@ jobs:
       - run: python -m pip install uv
       - run: uv sync --locked --extra dev --extra scholarly
       - run: uv run playwright install --with-deps chromium
-      - run: uv run pytest -m 'not live'
-      - run: uv run python scripts/build_release.py
+      # The HTTP integration tests serve UI deep links from web/dist.
+      # Build and test the SDK/console before creating the test server.
+      - name: Build and verify release packages
+        run: uv run python scripts/build_release.py
+      - name: Run Python integration tests
+        run: uv run pytest -m 'not live'
       - uses: actions/upload-artifact@v4
         with:
           name: ore-local-release
