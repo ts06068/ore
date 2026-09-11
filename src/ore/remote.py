@@ -33,7 +33,7 @@ async def _run_while_owned(operation, pulse, interrupt):
             await asyncio.gather(pending, return_exceptions=True)
 
 
-async def worker(server, token, *, parallel=1, codex_bin=None, once=False):
+async def worker(server, token, *, parallel=1, codex_bin=None, once=False, job_ids=None):
     if parallel < 1:
         raise ValueError('parallel must be positive')
     async with httpx.AsyncClient(base_url=server.rstrip('/'),
@@ -50,7 +50,7 @@ async def worker(server, token, *, parallel=1, codex_bin=None, once=False):
                 ident = 'host-' + uuid.uuid4().hex[:12]
                 await post('/v1/workers/register', {'id': ident, 'models': models})
                 while True:
-                    offer = await post(f'/v1/workers/{ident}/claim', {})
+                    offer = await post(f'/v1/workers/{ident}/claim', {} if job_ids is None else {'job_ids': list(job_ids)})
                     if not offer['task']:
                         if once:
                             return
@@ -105,6 +105,10 @@ async def worker(server, token, *, parallel=1, codex_bin=None, once=False):
                                 if failures >= 3:
                                     raise
                             else:
+                                if observed['result'].get('needs_user'):
+                                    await post(prefix + '/fail', {**fence, 'state': 'awaiting_user',
+                                        'error': {'code': 'needs_user', 'handoff_id': observed['result'].get('handoff_id')}})
+                                    return
                                 if decision['tool'] == 'finish':
                                     await post(prefix + '/finish', {**fence, 'result': observed['result']})
                                     return

@@ -1,0 +1,16 @@
+# Reuses the previously installed runtime dependencies for isolated acceptance.
+# Production images are built from the executor target in the root Dockerfile.
+FROM ore-engine:0.1.0
+USER root
+COPY src/ore /app/src/ore
+COPY packages/ore-scholarly/src/ore_scholarly /app/scholarly/ore_scholarly
+ENV PYTHONPATH=/app/src:/app/scholarly \
+    ORE_CONTAINER_EXECUTOR=1 \
+    ORE_EXECUTOR_STATE_DIR=/tmp/ore-executor
+USER ore
+HEALTHCHECK NONE
+ENTRYPOINT ["python3", "-m", "ore.executor"]
+CMD ["--server", "http://coordinator:8765"]
+USER root
+COPY tests/executor_fixture_server.py /app/executor_fixture_server.py
+USER ore

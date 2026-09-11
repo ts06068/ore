@@ -10,6 +10,9 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version, build_data):
+        desktop = Path(self.root) / 'deploy' / 'desktop'
+        if self.target_name == 'wheel' and (desktop / 'Dockerfile').is_file():
+            build_data.setdefault('force_include', {})[str(desktop)] = 'ore/desktop_assets'
         source = Path(self.root) / 'web' / 'dist'
         if (source / 'index.html').is_file():
             destination = 'ore/static' if self.target_name == 'wheel' else 'web/dist'

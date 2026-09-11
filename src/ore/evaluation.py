@@ -28,7 +28,7 @@ BASELINE_MODEL = "gpt-6-astra"
 BASELINE_EFFORT = "high"
 DOWNGRADE_TARGETS = {"retrieve": ("gpt-5.6-sol", "medium"), "extract": ("gpt-5.6-terra", "low"),
                      "classify": ("gpt-5.6-terra", "low")}
-TERMINAL = {"completed", "needs_review", "blocked", "failed", "paused", "cancelled", "awaiting_user", "awaiting_auth"}
+TERMINAL = {"completed", "needs_review", "blocked", "failed", "paused", "cancelled", "awaiting_user", "awaiting_auth", "awaiting_source", "paused_budget", "finished_incomplete"}
 ROUTING_KEYS = {"model", "effort", "model_policy", "routing"}
 
 
@@ -47,10 +47,36 @@ def _hash_file(path):
 
 def runtime_fingerprint() -> dict:
     root = Path(__file__).parent
-    names = ("engine.py", "tools.py", "contracts.py", "models.py", "policy.py", "store.py", "vault.py", "evaluation.py",
-             "browser.py", "codex.py", "providers.py", "config.py")
-    files = {name: _hash_file(root / name) for name in names}
-    return {"python": platform.python_version(), "files": files, "digest": canonical_digest(files)}
+    # Include all runtime modules and shipped extraction profiles. A calibration
+    # from another build cannot authorize a cheaper route after an upgrade.
+    files = {"ore/" + str(path.relative_to(root)): _hash_file(path)
+             for path in sorted(root.rglob("*.py"))}
+    for path in sorted((root / 'companion_extension').glob('*')):
+        if path.is_file() and path.suffix in {'.js', '.json', '.html'}:
+            files['ore/' + str(path.relative_to(root))] = _hash_file(path)
+    desktop_assets = root / 'desktop_assets'
+    if not desktop_assets.is_dir():
+        desktop_assets = root.parents[1] / 'deploy' / 'desktop'
+    if desktop_assets.is_dir():
+        for path in sorted(desktop_assets.rglob('*')):
+            if path.is_file() and (path.suffix in {'.py', '.json'} or path.name == 'Dockerfile'):
+                files['ore/desktop_assets/' + str(path.relative_to(desktop_assets))] = _hash_file(path)
+    from importlib.util import find_spec
+    from importlib.metadata import PackageNotFoundError, version
+    scholarly = find_spec("ore_scholarly")
+    if scholarly and scholarly.origin:
+        extension = Path(scholarly.origin).parent
+        for path in sorted(extension.rglob("*")):
+            if path.is_file() and path.suffix in {".py", ".json"}:
+                files["ore_scholarly/" + str(path.relative_to(extension))] = _hash_file(path)
+    dependencies = {}
+    for name in ("pydantic", "httpx", "playwright", "pypdf", "beautifulsoup4", "defusedxml", "sqlalchemy", "jsonschema"):
+        try:
+            dependencies[name] = version(name)
+        except PackageNotFoundError:
+            dependencies[name] = None
+    value = {"python": platform.python_version(), "files": files, "dependencies": dependencies}
+    return {**value, "digest": canonical_digest(value)}
 
 
 def _semantic_mission(mission):
@@ -310,6 +336,8 @@ provenance/quality gate, not a cryptographic attestation by a model provider.
                 reasons.append("routed_failure_count_exceeds_baseline")
     if report.get("runtime_changed_during_evaluation") is not False:
         reasons.append("runtime_equivalence_not_established")
+    if (report.get("runtime") or {}).get("digest") != runtime_fingerprint()["digest"]:
+        reasons.append("evaluation_runtime_differs_from_current_runtime")
     reasons = list(dict.fromkeys(reasons))
     validated = {**profile, "passed": True, "empirical_paired_cases": len(cases), "baseline_failures": baseline_failures,
                  "routed_failures": routed_failures, "validation_scope": "routing_quality_within_same_runtime",

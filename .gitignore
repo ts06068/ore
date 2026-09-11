@@ -1,11 +1,66 @@
+# Local runtime, downloads, browser profiles, and credentials
+.ore/
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+!*.env.example
+operator.token
+secrets.enc
+secret.key
+auth.json
+*.pid
+
+# Python environments, bytecode, and tooling caches
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.pyright/
+.tox/
+.nox/
+
+# Node dependencies and build/package output
+node_modules/
 dist/
 build/
-node_modules/
-.env
-.ore/
-*.egg-info/
+*.tsbuildinfo
+packages/sdk/artifacts/
+
+# Generated test, coverage, and execution reports
+*.log
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+pytest-report.xml
+playwright-report/
+test-results/
+deploy/*smoke-result.json
+
+# Local editor and operating system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local one-off account setup scripts (not reusable package tools)
+/scripts/activate_clarivate.py
+/scripts/clarivate_application.py
+/scripts/clarivate_institution_application.py
+/scripts/clarivate_institution_subscribe.py
+/scripts/clarivate_register.py
+/scripts/clarivate_subscribe.py
+/scripts/complete_registration.py
+/scripts/issue_elsevier_key.py
+/scripts/onboard_accounts.py
+/scripts/probe_onboarding.py
+/scripts/verify_scopus.py

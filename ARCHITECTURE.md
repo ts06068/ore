@@ -1,4 +1,8 @@
-> 구현 상태 (2026-09-10): 이 문서는 설계 근거와 과거 revision 기록을 보존한다. 현재 0.1.0 구현, 실행 방법 및 실측 검증 범위는 README.md와 VALIDATION.md를 기준으로 확인한다. Codex 연결은 native dynamic tools 대신 구조화된 행동 응답을 ORE가 검증·실행하는 방식이다.
+> 현재 0.5 구현 계약: [Native execution and measured reuse](docs/release-0.5.md). 아래 문서는 초기 설계와 이전 revision 기록을 보존합니다. 현재 실행 검증은 [VALIDATION](VALIDATION.md)을 기준으로 확인합니다.
+
+> 구현 상태 (2026-09-10): 이 문서는 설계 근거와 과거 revision 기록을 보존한다. 현재 0.2.0rc1 구현, 실행 방법 및 실측 검증 범위는 [README](README.md), [0.2 release guide](docs/release-0.2.md), [VALIDATION](VALIDATION.md)을 기준으로 확인한다. Codex 연결은 native dynamic tools 대신 구조화된 행동 응답을 ORE가 검증·실행하는 방식이다.
+
+> 0.3 구현: 대화/승인 → 범용 workflow → 버전된 capability → 기존 도구/격리 executor 구조를 추가했습니다. 구현 계약·적응 정책·중단 보장은 [0.3 설계 및 실행 안내](docs/release-0.3.md)에 정리되어 있습니다. 아래 초기 타당성 검토와 MVP 설명은 배경이며 현재 검증 결과는 [VALIDATION.md](VALIDATION.md)를 기준으로 합니다.
 
 # ORE — Open Retrieval Engine
 
@@ -501,6 +505,15 @@ Source 경로 최적화는 고정 모델/worker 조건에서 명시된 초기 �
 
 0.2 개정에서는 주 실행 주체를 LLM agent로 명확히 하고 Rune·실행 예제·backend·MVP를 함께 수정했다. 기관 내 실행과 관찰자별 개인정보 경계도 추가했다. GPT-6 Astra 문서와 Codex SDK 문서는 조회했으나 모델 호출, SDK 설치, challenge 처리, 기관 인증 또는 파일 다운로드를 실행하지 않았다.
 
-0.3 개정에서는 기본 backend를 구독 로그인한 로컬 Codex로 변경하고 challenge의 시도 한도·영속 카운터·사용자 인계를 구체화했다. 현재 컴퓨터에서 `/home/ts06067/.local/bin/codex`, `codex-cli 0.154.0`, `Logged in using ChatGPT`를 확인했다. `codex exec`와 `codex app-server` 도움말도 확인했으며, 설치 버전의 app-server는 experimental로 표시된다. 로그인 파일의 토큰을 읽거나 복사하지 않았다. 실제 요금제 종류·남은 한도·특정 모델의 turn 성공·ORE 도구 연동·challenge 통과는 아직 검증하지 않았다. Gemma 4 같은 모델의 자체 serving은 선택 가능한 별도 backend 구상이며 이 문서에서 해당 모델의 배포 가능성·하드웨어 사양·성능을 검증하지 않았다.
+0.3 개정에서는 기본 backend를 구독 로그인한 로컬 Codex로 변경하고 challenge의 시도 한도·영속 카운터·사용자 인계를 구체화했다. 현재 컴퓨터에서 `~/.local/bin/codex`, `codex-cli 0.154.0`, `Logged in using ChatGPT`를 확인했다. `codex exec`와 `codex app-server` 도움말도 확인했으며, 설치 버전의 app-server는 experimental로 표시된다. 로그인 파일의 토큰을 읽거나 복사하지 않았다. 실제 요금제 종류·남은 한도·특정 모델의 turn 성공·ORE 도구 연동·challenge 통과는 아직 검증하지 않았다. Gemma 4 같은 모델의 자체 serving은 선택 가능한 별도 backend 구상이며 이 문서에서 해당 모델의 배포 가능성·하드웨어 사양·성능을 검증하지 않았다.
 
 0.4 개정에서는 사용자 요청의 의미와 완전성 계약, discovery/retrieval 경로 분리, 비용을 고려한 OA/기관 경로 선택, backend별 모델·effort discovery와 평가 기반 routing, 다중 검색원의 coverage 보고, 고정 Astra 대비 비교 실험을 추가했다. 모델·runtime의 공식 문서 확인과 설계 수정만 수행했다. 현재 계정의 model/list 조회, 모델 routing 실행, corpus 수집 또는 비교 benchmark는 수행하지 않았다. 표의 모델 배정과 policy 효과는 검증 전 가설이다.
+
+
+## 0.4 runtime and console additions
+
+The console consumes turn-associated public structured-message deltas with durable replay cursors. Approval remains gated by final response validation. `public_stream.py` parses only public fields; `progress.py` combines dependency-aware runtime estimates with coordinator-owned collection counts.
+
+`scheduler.py` controls soft concurrency without changing the approved mission revision. `pool.py` issues scoped single-use executor enrollment and idle-drain decisions; `host_pool.py` owns Docker lifecycle on the trusted host. `challenge_policy.py` persists elapsed origin/principal episodes, and `challenge_service.py` enforces deadlines independently of model turns. Native desktop ownership leases remain separate from challenge budgets.
+
+See [0.4 behavior and limits](docs/release-0.4.md) and [host pool deployment](docs/host-pool.md).

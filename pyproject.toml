@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ore-engine"
-version = "0.1.0"
+version = "0.6.0rc1"
 description = "Protocol-driven retrieval with LLM agents, durable evidence, and remote browser control"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,12 +14,13 @@ dependencies = [
   "sqlalchemy>=2.0.40,<3", "psycopg[binary]>=3.2,<4", "alembic>=1.15,<2",
   "playwright==1.62.0", "pyyaml>=6,<7", "pypdf>=5,<7", "beautifulsoup4>=4.13,<5",
   "cryptography>=44,<49", "boto3>=1.38,<2", "python-multipart>=0.0.20,<1",
-  "websockets>=15,<17"
+  "websockets>=15,<17", "defusedxml>=0.7,<1", "jsonschema>=4.23,<5"
 ]
 [project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.2.152,<0.3"]
 dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.26,<2", "build>=1.2,<2", "ruff>=0.11,<1"]
 ocr = ["pytesseract>=0.3.13,<1", "pillow>=11,<13"]
-scholarly = ["ore-scholarly>=0.1.0,<0.2"]
+scholarly = ["ore-scholarly>=0.2.0rc2,<0.3"]
 [project.scripts]
 ore = "ore.cli:app"
 [tool.hatch.build.targets.wheel]
@@ -27,7 +28,7 @@ packages = ["src/ore"]
 [tool.hatch.build.hooks.custom]
 path = "scripts/hatch_build.py"
 [tool.hatch.build.targets.sdist]
-include = ["/src/ore", "/pyproject.toml", "/README.md", "/scripts/hatch_build.py", "/examples", "/docs", "/ARCHITECTURE.md", "/VALIDATION.md", "/scripts/clarivate_institution_application.py", "/scripts/clarivate_institution_subscribe.py"]
+include = ["/src/ore", "/ORE_Original.svg", "/web/public", "/scripts/acceptance_journal_access.py", "/scripts/benchmark_architecture.py", "/scripts/benchmark_architecture_v2.py", "/scripts/benchmark_evaluation_v2.py", "/scripts/benchmark_fixtures_v2.py", "/scripts/benchmark_fixtures.py", "/pyproject.toml", "/README.md", "/scripts/hatch_build.py", "/examples", "/docs", "/ARCHITECTURE.md", "/VALIDATION.md", "/deploy", "/Dockerfile", "/scripts/acceptance_issue.py", "/scripts/acceptance_api_fallback.py", "/scripts/acceptance_agent_challenge.py", "/scripts/diagnose_desktop.py", "/scripts/acceptance_desktop.py", "/scripts/acceptance_scholarly_fixture.py", "/scripts/acceptance_workflow_runtime.py", "/web/src", "/web/package.json", "/web/package-lock.json", "/web/tsconfig.json", "/web/vite.config.ts", "/web/index.html", "/packages/sdk/src", "/packages/sdk/package.json", "/packages/sdk/package-lock.json", "/packages/sdk/tsconfig.json", "/packages/ore-scholarly/src", "/packages/ore-scholarly/README.md", "/packages/ore-scholarly/pyproject.toml"]
 [tool.uv.workspace]
 members = ["packages/ore-scholarly"]
 [tool.uv.sources]

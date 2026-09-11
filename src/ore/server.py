@@ -11,24 +11,35 @@ from pathlib import Path
 from urllib.parse import urlsplit
 import yaml
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from .engine import Engine
 from .models import Rune
 from .policy import AccessDenied, ModelPolicy, redact
-from .store import LeaseLost, ControlConflict
+from .store import LeaseLost, ControlConflict, DocumentConflict
+from .handoffs import HandoffService, BrowserAccess, create_handoff_router
+from .progress import progress_snapshot
+from . import __version__
 from .tools import ToolRuntime
 
 
 def create_app(engine=None):
     engine=engine or Engine();remote_tools={}
+    if not hasattr(engine,'handoffs'):engine.handoffs=HandoffService(engine.store)
+    browser=BrowserAccess(engine)
+    handoff_router=create_handoff_router(engine,browser)
     @asynccontextmanager
     async def lifespan(app):
         await engine.start()
+        engine.handoffs.recover_interrupted_actions()
         yield
+        if getattr(engine, 'connections', None):
+            await engine.connections.close()
         await engine.stop()
-    app=FastAPI(title='ORE',version='0.1.0',lifespan=lifespan);app.state.engine=engine
+    app=FastAPI(title='ORE',version=__version__,lifespan=lifespan);app.state.engine=engine
     def valid(token):return bool(token) and secrets.compare_digest(str(token),engine.settings.auth_token)
     def auth(headers,cookies):
         bearer=headers.get('authorization','')
@@ -40,22 +51,36 @@ def create_app(engine=None):
         if request.url.path.startswith('/v1/'):
             if request.method not in ('GET','HEAD','OPTIONS') and not origin_ok(request.headers.get('origin'),request.headers.get('host')):
                 return JSONResponse({'detail':'Cross-origin mutations are disabled'},403)
-            if request.url.path!='/v1/auth/login' and not auth(request.headers,request.cookies):
+            executor=getattr(engine,'execution',None)
+            scoped_executor=bool(executor and executor.authorize_request(request))
+            pool=getattr(engine,'pool',None)
+            scoped_pool=bool(pool and pool.authorize_request(request))
+            if request.url.path!='/v1/auth/login' and not (auth(request.headers,request.cookies) or scoped_executor or scoped_pool):
                 return JSONResponse({'detail':'Operator authentication required'},401)
         response=await call_next(request)
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Referrer-Policy']='no-referrer'
         response.headers['Cache-Control']='no-store' if request.url.path.startswith('/v1/') else 'no-cache'
         return response
+    @app.exception_handler(RequestValidationError)
+    async def protected_input_error(request, exc):
+        if '/secret' in request.url.path or request.url.path.endswith('/login-code'):
+            return JSONResponse({'detail': 'Invalid protected credential request'}, 422)
+        return await request_validation_exception_handler(request, exc)
+
     @app.exception_handler(AccessDenied)
     @app.exception_handler(ControlConflict)
     async def denied(request,exc):return JSONResponse({'detail':str(exc)},403)
+    @app.exception_handler(DocumentConflict)
     @app.exception_handler(LeaseLost)
     async def lease(request,exc):return JSONResponse({'detail':str(exc)},409)
     @app.exception_handler(KeyError)
     async def missing(request,exc):return JSONResponse({'detail':'Requested record does not exist'},404)
     @app.exception_handler(__import__('playwright.async_api',fromlist=['Error']).Error)
     async def browser_error(request,exc):return JSONResponse({'detail':'Browser action could not complete; inspect the current session','code':type(exc).__name__},409)
+    @app.exception_handler(__import__('ore.desktop', fromlist=['DesktopError']).DesktopError)
+    async def desktop_error(request, exc):
+        return JSONResponse({'detail': str(exc), 'code': 'desktop_runtime_unavailable'}, 503)
     @app.exception_handler(ValueError)
     async def invalid(request,exc):return JSONResponse({'detail':str(exc)[:2000]},422)
     def job(ident):
@@ -63,7 +88,7 @@ def create_app(engine=None):
         if result is None:raise KeyError(ident)
         return result
     @app.get('/healthz')
-    async def health():return {'status':'ok','version':'0.1.0'}
+    async def health():return {'status':'ok','version':__version__}
     @app.post('/v1/auth/login')
     async def login(request:Request):
         body=await request.json()
@@ -76,13 +101,29 @@ def create_app(engine=None):
         response=JSONResponse({'authenticated':False});response.delete_cookie('ore_session');return response
     @app.get('/v1/auth/status')
     async def auth_status():return {'authenticated':True,'codex_installed':bool(engine.backend.binary),'configured_secret_refs':engine.secrets.names()}
+    @app.get('/v1/scheduler')
+    async def scheduler():return engine.scheduler.snapshot()
     @app.get('/v1/jobs')
     async def jobs():return engine.store.list_jobs()
     @app.post('/v1/jobs',status_code=201)
     async def create(request:Request):
         body=await request.json();return engine.create(body.get('mission',body),body.get('rune'),queued=False)
     @app.get('/v1/jobs/{ident}')
-    async def detail(ident:str):return {**job(ident),'audit':engine.audit(ident),'tasks':engine.store.tasks(ident)}
+    async def detail(ident:str):
+        record=job(ident);audit=engine.audit(ident)
+        requests=[await handoff_router.handoff_output(h) for h in engine.handoffs.list(ident,'active')]
+        return {**record,'audit':audit,'tasks':engine.store.tasks(ident),'handoffs':requests,'href':f'/jobs/{ident}','progress':progress_snapshot(engine.store,record,requests,audit=audit.get('coverage',audit))}
+    @app.get('/v1/jobs/{ident}/progress')
+    async def progress(ident:str):
+        record=job(ident);audit=engine.audit(ident)
+        return progress_snapshot(engine.store,record,engine.handoffs.list(ident,'active'),audit=audit.get('coverage',audit))
+    @app.get('/v1/jobs/{ident}/coverage')
+    async def coverage(ident:str):
+        record=job(ident);result={}
+        for kind in ('collection','issue','article','binding','candidate'):
+            rows=engine.store.list_documents('coverage.'+kind,job_id=ident)
+            result[{'issue':'issues','article':'articles','binding':'bindings','candidate':'candidates'}.get(kind,kind)]=[redact({k:v for k,v in row.items() if k not in ('path','body','snapshot','html')}) for row in rows if row['revision']==record['revision'] and row['generation']==record['generation']]
+        return result
     @app.patch('/v1/jobs/{ident}')
     async def revise(ident:str,request:Request):
         patch=await request.json();old=job(ident)['mission'];value={**old,**patch.get('mission',patch)}
@@ -131,12 +172,18 @@ def create_app(engine=None):
     async def models():
         try:return await engine.models()
         except Exception as exc:raise HTTPException(503,f'Model catalog unavailable: {type(exc).__name__}') from exc
+    @app.get('/v1/capabilities')
+    async def capabilities():
+        return {'capabilities':engine.capabilities.catalog(),'plugin_errors':engine.capabilities.plugin_errors}
+    @app.get('/v1/coverage-profiles')
+    async def coverage_profiles():return engine.coverage.profiles()
+    @app.post('/v1/coverage-profiles',status_code=201)
+    async def register_coverage_profile(request:Request):
+        return engine.coverage.register_profile(await request.json(),reviewer='operator')
     @app.get('/v1/sources')
-    async def sources():
-        try:
-            from ore_scholarly import list_sources
-            return list_sources()
-        except ImportError:return []
+    async def sources(access_profile_id:str='public'):
+        from .source_policy import source_catalog
+        return source_catalog(engine.profile({'access_profile_ref':access_profile_id}),engine.secrets.get)
     def rune_output(r):return {**r,'id':r.get('protocol_id'),'content':yaml.safe_dump(r,allow_unicode=True,sort_keys=False)}
     @app.get('/v1/runes')
     async def runes():return [rune_output(x) for x in engine.runes()]
@@ -158,50 +205,39 @@ def create_app(engine=None):
     async def secret(ref:str,request:Request):
         body=await request.json();engine.secrets.set(ref,body['value']);return {'ref':ref,'stored':True}
     @app.get('/v1/browser/sessions')
-    async def sessions():return await engine.browser.list()
+    async def sessions():return await browser.sessions()
     @app.post('/v1/browser/sessions')
     async def open_browser(request:Request):
         body=await request.json()
         if body.get('job_id'):record=job(body['job_id'])
-        else:record=engine.create({'goal':'Operator access onboarding','artifact_roles':[],'limits':{'origin_min_interval_seconds':0.2},'access_profile_ref':body.get('access_profile_ref','public')},queued=False)
+        else:
+            from .operator_access import operator_mission
+            conversation_id = body.get('conversation_id')
+            if conversation_id and engine.store.get_document('conversation', conversation_id) is None:
+                raise KeyError('Unknown conversation')
+            record=engine.create(operator_mission(body.get('url'), profile=body.get('access_profile_ref','public'), conversation_id=conversation_id),queued=False)
         await engine.pause(record['id'],'awaiting_user')
-        session=await engine.browser.create(record['id'],record['mission'],engine.profile(record['mission']))
-        if body.get('url'):await engine.browser.action(session.id,'navigate',{'url':body['url'],'screenshot':False})
-        return await engine.browser.takeover(session.id)
+        sid=await browser.create(record,engine.profile(record['mission']))
+        summary=await browser.command(sid,'takeover')
+        if body.get('url'):await browser.command(sid,'action',{'action':'navigate','url':body['url'],'epoch':summary['epoch'],'screenshot':False})
+        handoff=engine.handoffs.create(record['id'],'browser','Operator browser session',session_id=sid,context={**summary,'url':body.get('url')})
+        return {**(await browser.summary(sid)),'handoff_id':handoff['id'],'handoff_href':handoff['href']}
     @app.post('/v1/browser/{sid}/{action}')
     async def control(sid:str,action:str,request:Request):
-        session=engine.browser.get(sid)
-        if action=='observe':
-            result=await engine.browser.observe(sid,owner='human',screenshot=False)
-            for ref in ('onboarding/email','onboarding/password'):
-                value=engine.secrets.get(ref)
-                if value:result['text']=result.get('text','').replace(value,'[private account]')
-            return result
-        if action=='input':
-            data=await request.json()
-            return await engine.browser.action(sid,data['action'],data,owner='human')
-        if action=='secret-fill':
-            data=await request.json()
-            if session.control!='human':raise AccessDenied('Secret input requires operator browser control')
-            value=engine.secrets.get(data['ref'])
-            if value is None:raise AccessDenied('Secret reference is unavailable')
-            async with session.lock:
-                await engine.browser._authorize(session,'human',data.get('epoch',session.epoch))
-                await session.page.locator(data['selector']).fill(value)
-            return {'filled':True,'session_id':sid}
-        if action=='secret-capture':
-            data=await request.json()
-            if session.control!='human':raise AccessDenied('Secret capture requires operator browser control')
-            async with session.lock:
-                await engine.browser._authorize(session,'human',data.get('epoch',session.epoch))
-                target=session.page.locator(data['selector'])
-                value=await target.input_value() if await target.evaluate("e => 'value' in e") else await target.inner_text()
-                engine.secrets.set(data['ref'],value.strip())
-            return {'captured':True,'ref':data['ref']}
+        session=browser.session(sid)
+        data=await request.json() if request.headers.get('content-length','0')!='0' else {}
+        if action in ('input','secret-fill','secret-capture'):return await browser.command(sid,'action' if action=='input' else action,data)
+        if action=='observe':return await browser.command(sid,'observe')
         if action=='takeover':
-            await engine.pause(session.job_id,'awaiting_user');return await engine.browser.takeover(sid)
+            await engine.pause(session.job_id,'awaiting_user')
+            result=await browser.command(sid,'takeover',data)
+            engine.handoffs.create(session.job_id,'browser','Operator control requested',session_id=sid,context=result)
+            return result
         if action=='resume':
-            result=await engine.browser.resume(sid);await engine.run(session.job_id);return result
+            requests=[h for h in engine.handoffs.list(session.job_id,'active') if h.get('session_id')==sid]
+            if requests:raise HTTPException(409,{'message':'Resume through the durable handoff after verification','handoff_href':requests[0]['href']})
+            if (await browser.command(sid,'observe')).get('challenge_detected'):raise AccessDenied('The browser still displays a challenge')
+            result=await browser.command(sid,'resume',data);await engine.run(session.job_id);return result
         raise HTTPException(404,'Unknown browser action')
     @app.websocket('/v1/browser/{sid}/stream')
     async def browser_socket(ws:WebSocket,sid:str):
@@ -213,7 +249,7 @@ def create_app(engine=None):
                 with contextlib.suppress(Exception):token=base64.urlsafe_b64decode(p[10:]+'='*(-len(p[10:])%4)).decode()
         if not (valid(token) or auth(ws.headers,ws.cookies)) or not origin_ok(ws.headers.get('origin'),ws.headers.get('host')):
             await ws.close(code=4403);return
-        try:session=engine.browser.get(sid)
+        try:session=browser.session(sid)
         except AccessDenied:await ws.close(code=4404);return
         await ws.accept(subprotocol='ore.v1' if 'ore.v1' in [p.strip() for p in protocols] else None)
         queue=asyncio.Queue(maxsize=1);session.subscribers.add(queue)
@@ -225,16 +261,45 @@ def create_app(engine=None):
             while True:
                 data=await ws.receive_json()
                 if data.get('type')!='input':continue
-                try:await engine.browser.action(sid,data['action'],data,owner='human')
+                try:await browser.command(sid,'action',data)
                 except AccessDenied as exc:await ws.send_json({'type':'error','message':str(exc)})
         except (WebSocketDisconnect,RuntimeError):pass
         finally:
             sender.cancel();session.subscribers.discard(queue);await asyncio.gather(sender,return_exceptions=True)
+    app.include_router(handoff_router)
+    from .desktop_api import create_desktop_router
+    app.include_router(create_desktop_router(engine))
+    from .companion_api import create_companion_router
+    app.include_router(create_companion_router(engine))
+    from .connections import create_connection_router
+    app.include_router(create_connection_router(engine,browser))
+    from .onboarding import create_onboarding_router
+    app.include_router(create_onboarding_router(engine,browser))
+    if getattr(engine,'execution',None):
+        from .execution import create_execution_router
+        app.include_router(create_execution_router(engine.execution))
+    if getattr(engine,'pool',None):
+        from .pool import create_pool_router
+        app.include_router(create_pool_router(engine.pool))
+    from .conversation_api import attach_conversation_routes
+    attach_conversation_routes(app,engine)
     from .worker_api import create_worker_router
     app.include_router(create_worker_router(engine))
     static=Path(os.environ.get('ORE_WEB_DIR',str(Path(__file__).parent/'static')))
     if not static.exists():static=Path('web/dist')
-    if static.exists():app.mount('/',StaticFiles(directory=static,html=True),name='web')
+    if static.exists():
+        @app.get('/chat')
+        @app.get('/chat/{ident}')
+        @app.get('/conversations/{ident}')
+        @app.get('/jobs')
+        @app.get('/jobs/{ident}')
+        @app.get('/handoffs/{ident}')
+        @app.get('/handoffs')
+        @app.get('/connections')
+        @app.get('/browser')
+        @app.get('/runes')
+        async def web_route():return FileResponse(static/'index.html')
+        app.mount('/',StaticFiles(directory=static,html=True),name='web')
     else:
         @app.get('/')
         async def root():return {'name':'ORE','api':'/docs','web':'Build web/ or configure ORE_WEB_DIR'}

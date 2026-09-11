@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from .challenge_policy import default_policy, normalize_policy
 
 
 def canonical_digest(value: Any) -> str:
@@ -27,8 +28,16 @@ class Budget(Contract):
     max_seconds: float = Field(default=3600, gt=0)
     max_tokens: int | None = Field(default=None, ge=1)
     max_bytes: int = Field(default=1_000_000_000, ge=1)
-    max_agent_workers: int = Field(default=4, ge=1, le=64)
+    max_agent_workers: int = Field(default=5, ge=1, le=64)
     max_tasks: int = Field(default=10_000, ge=1)
+
+
+class Parallelism(BaseModel):
+    """Initial soft target; the approved Budget remains the hard ceiling."""
+    model_config = ConfigDict(extra="forbid")
+    initial: int = Field(default=5, ge=1, le=64)
+    mode: Literal["adaptive", "fixed"] = "adaptive"
+    per_origin: int = Field(default=2, ge=1, le=64)
 
 
 class PublicationWindow(Contract):
@@ -43,7 +52,18 @@ class PublicationWindow(Contract):
         return self
 
 
+class RetrievalPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["official_first", "api_open_access_first"] = "api_open_access_first"
+    browser_fallback: bool = True
+
+
 class Mission(Contract):
+    schema_version: str = "ore.mission/v2"
+    agent_runtime: Literal["auto", "native", "structured"] = "auto"
+    budget_scope_id: str | None = Field(default=None, min_length=1, max_length=160)
+    source_policy: dict[str, Any] | None = None
+    retrieval_policy: RetrievalPolicy | None = None
     goal: str = Field(min_length=1)
     urls: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
@@ -56,6 +76,15 @@ class Mission(Contract):
     access_profile: str = "public"
     publication_window: PublicationWindow | None = None
     budget: Budget = Field(default_factory=Budget)
+    parallelism: Parallelism = Field(default_factory=Parallelism)
+    on_challenge: dict[str, Any] = Field(default_factory=default_policy)
+
+    @field_validator("on_challenge", mode="before")
+    @classmethod
+    def normalize_challenge(cls, value):
+        from .challenge_policy import normalize_policy
+        return normalize_policy(value)
+
     scope: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -65,6 +94,11 @@ class Mission(Contract):
             return value
         data = dict(value)
         data.setdefault("goal", data.get("instructions") or data.get("name"))
+        journal = str(data.get("rune_id", "")).startswith("journal.") or (data.get("scope") or {}).get("collection_kind") == "journal"
+        if journal:
+            data.setdefault("completeness", "systematic")
+        from .source_policy import normalize_source_policy
+        data["source_policy"] = normalize_source_policy(data)
         routing = data.get("routing") or {}
         if isinstance(routing, dict):
             for source, target in (("mode", "model_policy"), ("model", "model"), ("effort", "effort")):

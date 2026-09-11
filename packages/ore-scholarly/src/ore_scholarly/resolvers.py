@@ -16,10 +16,13 @@ IDCONV = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 XLINK = "{http://www.w3.org/1999/xlink}href"
 
 
+from .versions import normalize_article_version
+
+
 def candidate(source, identifier, url, role, *, version="unknown", license=None, evidence_url=None, **extra):
     return {"id": f"{source}:{identifier}:{role}:" + hashlib.sha256(url.encode()).hexdigest()[:16],
             "source": source, "identifier": identifier, "title": None, "url": url, "role": role,
-            "version": version, "license": license,
+            "version": normalize_article_version(version), "version_raw": version, "license": license,
             "media_type": mimetypes.guess_type(urlsplit(url).path)[0], "downloaded": False,
             "provenance": {"source": source, "record_id": identifier, "retrieved_at": now(),
                            "endpoint": endpoint(evidence_url or url)}, **extra}
@@ -125,16 +128,49 @@ def supplement_links(root):
     """JATS relationships, not filename guesses or all media, determine role."""
     result = []
     for element in root.iter():
-        if element.tag not in ("supplementary-material", "inline-supplementary-material"):
+        typed_section = element.tag == "sec" and element.get("sec-type", "").strip().lower() == "supplementary-material"
+        if element.tag not in ("supplementary-material", "inline-supplementary-material") and not typed_section:
             continue
         refs = []
         for child in element.iter():
             href = child.get(XLINK) or child.get("href")
             if href and child.tag in ("supplementary-material", "inline-supplementary-material", "media", "ext-link"):
                 refs.append(href)
-        result.append({"id": element.get("id"), "label": text(element, "label"),
-                       "caption": text(element, "caption"), "hrefs": list(dict.fromkeys(refs))})
+        result.append({"id": element.get("id"), "label": text(element, "label") or text(element, "title"),
+                       "caption": text(element, "caption"), "hrefs": list(dict.fromkeys(refs)),
+                       "tag": element.tag, **({"sec_type": element.get("sec-type")} if typed_section else {})})
     return result
+
+
+def pmc_jats_version(root, metadata, xml_url):
+    """Use explicit publication-state labels, never PMC/JATS version numbers."""
+    article_meta = root.find("front/article-meta")
+    declarations, corrections = [], []
+    if article_meta is not None:
+        elements = article_meta.findall("article-version") + article_meta.findall("article-version-alternatives/article-version")
+        for element in elements:
+            raw_type = element.get("article-version-type", "")
+            declarations.append({"type": raw_type, "value": text(element),
+                                 "vocab": element.get("vocab"), "vocab_identifier": element.get("vocab-identifier"),
+                                 "normalized": normalize_article_version(raw_type)})
+        for element in article_meta.findall("related-article"):
+            relation = element.get("related-article-type", "")
+            if "correction" in relation.lower() or "erratum" in relation.lower():
+                corrections.append({"related_article_type": relation, "href": element.get(XLINK) or element.get("href"),
+                                    "doi": doi(text(element, "pub-id[@pub-id-type='doi']")),
+                                    "title": text(element, "article-title")})
+    explicit = {row["normalized"] for row in declarations if row["normalized"] != "unknown"}
+    states = explicit | ({"accepted_manuscript"} if metadata.get("is_manuscript") is True else set())
+    conflict = len(states) > 1
+    state = next(iter(states)) if len(states) == 1 else "unknown"
+    raw = next((row["type"] for row in declarations if row["normalized"] == state), state) if not conflict else "unknown"
+    return {"version": state, "version_raw": raw,
+            "version_evidence": "conflicting explicit publication-state evidence" if conflict else
+                "jats.article-version@article-version-type" if explicit else
+                "pmc_dataset.is_manuscript; a false value does not prove publishedVersion",
+            **({"version_evidence_url": endpoint(xml_url)} if explicit else {}), "jats_article_versions": declarations,
+            "version_conflict": conflict, "correction_links": corrections,
+            "correction_incorporation": "unknown"}
 
 
 def choose_media(href, media):
@@ -168,13 +204,14 @@ async def pmc(client, identifier, config):
             raise ScholarlyError("identity_mismatch", "PMC metadata does not match the selected article version.", source="pmc")
         if doi(identifier) and doi(metadata.get("doi")) != doi(identifier):
             raise ScholarlyError("identity_mismatch", "PMC article version has a different DOI.", source="pmc")
-        version_type = "author_manuscript" if metadata.get("is_manuscript") else "unknown"
-        common = {"version": version_type, "article_version": version_number, "pmcid": base,
+        version_type = "accepted_manuscript" if metadata.get("is_manuscript") is True else "unknown"
+        common = {"version": version_type, "article_version": version_number, "pmc_dataset_version": version_number, "pmcid": base,
                   "doi": doi(metadata.get("doi")), "title": metadata.get("title"), "license": metadata.get("license_code"),
                   "evidence_url": metadata_url, "is_retracted": metadata.get("is_retracted"),
-                  "is_pmc_openaccess": metadata.get("is_pmc_openaccess"),
+                  "is_pmc_openaccess": metadata.get("is_pmc_openaccess"), "is_manuscript": metadata.get("is_manuscript"),
                   "is_historical_ocr": metadata.get("is_historical_ocr"),
-                  "version_evidence": "pmc_dataset.is_manuscript; a false value does not prove publishedVersion"}
+                  "version_evidence": "pmc_dataset.is_manuscript; a false value does not prove publishedVersion",
+                  "version_evidence_url": metadata_url}
         xml_url = None
         media = [pmc_object_url(url, prefix) for url in metadata.get("media_urls") or []]
         for field, role in (("pdf_url", "main_pdf"), ("xml_url", "full_text_xml"), ("text_url", "full_text_text")):
@@ -189,6 +226,15 @@ async def pmc(client, identifier, config):
         if xml_url and config.get("inspect_jats", True):
             try:
                 root = await get(client, xml_url, "pmc", kind="xml")
+                version_details = pmc_jats_version(root, metadata, xml_url)
+                common.update({key: value for key, value in version_details.items() if key not in ("version", "version_raw")})
+                common["version"] = version_details["version_raw"]
+                for item in candidates:
+                    if item["identifier"] == prefix:
+                        item.update(version_details)
+                observation.update(version_details)
+                if version_details["version_conflict"]:
+                    issues.append({"article_version": prefix, "code": "publication_version_conflict"})
                 references = supplement_links(root)
                 observation["supplement_references"] = references
                 observation["supplement_status"] = "references_found" if references else "none_observed_in_jats"
@@ -202,10 +248,13 @@ async def pmc(client, identifier, config):
                             unmatched.discard(target)
                             if not any(c["url"] == target and c["role"] == "supplement" for c in candidates):
                                 candidates.append(candidate("pmc", prefix, target, "supplement", expected_md5=digest,
-                                    relationship_evidence={"tag": "supplementary-material", "href": href, "id": reference["id"]}, **common))
+                                    relationship_evidence={key: value for key, value in reference.items() if key in ("tag", "sec_type", "id")}
+                                        | {"href": href}, **common))
                         elif urlsplit(href).scheme in ("http", "https"):
                             candidates.append(candidate("pmc", prefix, href, "supplement", media_type=None,
-                                external_reference=True, relationship_evidence={"tag": "supplementary-material", "href": href}, **common))
+                                external_reference=True,
+                                relationship_evidence={key: value for key, value in reference.items() if key in ("tag", "sec_type", "id")}
+                                    | {"href": href}, **common))
                             issues.append({"article_version": prefix, "code": "external_supplement_requires_inspection"})
                         else:
                             issues.append({"article_version": prefix, "code": "supplement_object_unresolved", "href": href})
@@ -216,7 +265,7 @@ async def pmc(client, identifier, config):
                 issues.append({"article_version": prefix, "code": exc.code, "phase": "jats_inspection"})
         for target, digest in media:
             if target in unmatched:
-                candidates.append(candidate("pmc", prefix, target, "media", expected_md5=digest,
+                candidates.append(candidate("pmc", prefix, target, "media", expected_md5=digest, classification="media_unknown",
                     relationship_evidence="dataset.media_urls; supplement role unproven", **common))
         observations.append(observation)
     has_pdf = any(c["role"] == "main_pdf" for c in candidates)

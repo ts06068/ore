@@ -1,0 +1,12 @@
+{
+  "package": "@fontsource-variable/inter",
+  "version": "5.2.8",
+  "source": "https://github.com/google/fonts",
+  "font_version": "v20",
+  "license": {
+    "type": "OFL-1.1",
+    "url": "https://openfontlicense.org",
+    "attribution": "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter) Inter-Italic[opsz,wght].ttf: Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)"
+  },
+  "delivery": "Vite bundles locally imported WOFF2 files; no font CDN at runtime."
+}

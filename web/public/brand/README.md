@@ -1,0 +1,1 @@
+The full original logo is copied byte-for-byte from the repository root ORE_Original.svg. The symbol variants retain the exact ORE_Symbol path; only framing and foreground color differ. Inverse variants use the same geometry. No generated imagery or replacement typography is used.

@@ -34,6 +34,12 @@ class ControlConflict(StoreError):
     pass
 
 
+class DocumentConflict(StoreError):
+    """A durable record changed since the caller observed it."""
+
+    pass
+
+
 def utcnow():
     return datetime.now(timezone.utc)
 
@@ -192,6 +198,35 @@ class Store:
                 query = query.where(documents.c.generation == job["generation"])
             return [self._doc_out(r) for r in conn.execute(query.order_by(documents.c.created_at))]
 
+    def get_document(self, collection, key):
+        with self._lock, self.engine.connect() as conn:
+            row = self._doc(conn, collection, key)
+            return self._doc_out(row) if row else None
+
+    def put_document(self, collection, key, data, job_id=None, lease=None, expected_version=None):
+        """Atomically replace a document; expected_version=0 means create only."""
+        with self._tx() as conn:
+            job = self._job(conn, job_id) if job_id else None
+            if lease:
+                if not job_id:
+                    raise ValueError('A task lease requires a job-bound document')
+                self._verify_lease(conn, job_id, lease)
+            old = self._doc(conn, collection, key)
+            version = int(old['data'].get('state_version', 0)) if old else 0
+            if expected_version is not None and version != expected_version:
+                raise DocumentConflict('Document changed; reload before retrying')
+            if old and old['job_id'] != job_id:
+                raise DocumentConflict('Document belongs to another job')
+            value = {**data, 'state_version': version + 1}
+            return self._doc_out(self._put(conn, collection, key, value, job))
+
+    def list_documents(self, collection, job_id=None, all_generations=False):
+        if job_id:
+            return self._list(job_id, collection, all_generations=all_generations)
+        with self._lock, self.engine.connect() as conn:
+            query = select(documents).where(documents.c.collection == collection)
+            return [self._doc_out(row) for row in conn.execute(query.order_by(documents.c.created_at))]
+
     def create_job(self, mission: dict, rune: dict | None = None):
         mission, rune = _json(mission), _json(rune)
         now = utcnow()
@@ -243,11 +278,12 @@ class Store:
             self._event(conn, job_id, "job.refreshed", {"generation": job["generation"] + 1})
         return self.get_job(job_id)
 
-    def reset_for_resume(self, job_id):
+    def reset_for_resume(self, job_id, blocked_task_ids=None):
         with self._tx() as conn:
             job = self._job(conn, job_id)
             conn.execute(update(tasks).where(tasks.c.job_id == job_id, tasks.c.revision == job["revision"],
-                tasks.c.generation == job["generation"], tasks.c.state.in_(["paused", "awaiting_auth", "awaiting_user", "blocked"]))
+                tasks.c.generation == job["generation"], tasks.c.id.not_in(blocked_task_ids or []),
+                tasks.c.state.in_(["paused", "paused_budget", "awaiting_auth", "awaiting_user", "awaiting_source", "blocked"]))
                 .values(state="queued", updated_at=utcnow()))
             conn.execute(update(jobs).where(jobs.c.id == job_id).values(state="queued", updated_at=utcnow()))
             self._event(conn, job_id, "job.resumed", {"revision": job["revision"]})
@@ -398,16 +434,54 @@ class Store:
             if kinds:
                 query = query.where(tasks.c.kind.in_(kinds))
             blocked_jobs = set()
+            blocked_tasks = set()
             while True:
                 candidate = query.where(tasks.c.job_id.not_in(blocked_jobs)) if blocked_jobs else query
+                if blocked_tasks:
+                    candidate = candidate.where(tasks.c.id.not_in(blocked_tasks))
                 old = conn.execute(candidate.order_by(tasks.c.created_at).limit(1)).mappings().first()
                 if not old:
                     return None
                 current_job = self._job(conn, old["job_id"])
+                if not self._workflow_control_valid(conn, old, current_job):
+                    blocked_tasks.add(old["id"])
+                    continue
                 mission = current_job["mission"]
                 backend = mission.get("backend", "codex")
                 backend = backend.get("kind", "codex") if isinstance(backend, dict) else backend
-                cap = int(mission.get("budget", {}).get("max_agent_workers", mission.get("limits", {}).get("max_agent_workers", 4)))
+                cap = int(mission.get("budget", {}).get("max_agent_workers", mission.get("limits", {}).get("max_agent_workers", 5)))
+                from .scheduler import task_admission
+                control = self._doc(conn, 'scheduler.control', 'global')
+                soft = self._doc(conn, 'scheduler.job', old['job_id'])
+                if soft and soft['data'].get('job_revision') == current_job['revision']:
+                    cap = min(cap, max(0, int(soft['data']['target'])))
+                if control:
+                    limits = control['data']
+                    all_running = conn.execute(select(tasks, jobs.c.mission.label('admission_mission')).join(
+                        jobs, jobs.c.id == tasks.c.job_id).where(tasks.c.state == 'running',
+                        tasks.c.lease_expires_at > now)).mappings().all()
+                    if len(all_running) >= int(limits.get('global_limit', 64)):
+                        return None
+                    hint = task_admission(old, mission)
+                    if hint['executor'] and limits.get('executor_limit') is not None:
+                        occupied = sum(task_admission(t, t['admission_mission'])['executor'] for t in all_running)
+                        if occupied >= int(limits['executor_limit']):
+                            blocked_tasks.add(old['id']); continue
+                    if hint['browser'] and soft and soft['data'].get('runtime_kind') == 'desktop_chrome' and limits.get('native_desktop_limit') is not None:
+                        native_running = 0
+                        for active in all_running:
+                            active_control = self._doc(conn, 'scheduler.job', active['job_id'])
+                            if active_control and active_control['data'].get('runtime_kind') == 'desktop_chrome' and task_admission(active, active['admission_mission'])['browser']:
+                                native_running += 1
+                        if native_running >= int(limits['native_desktop_limit']):
+                            blocked_tasks.add(old['id']); continue
+                    if hint['origin']:
+                        origin_cap = max(1, int((mission.get('parallelism') or {}).get('per_origin', 2)))
+                        same_origin = [t for t in all_running if task_admission(t, t['admission_mission'])['origin'] == hint['origin']]
+                        if same_origin:
+                            origin_cap = min([origin_cap] + [int((t['admission_mission'].get('parallelism') or {}).get('per_origin', 2)) for t in same_origin])
+                        if len(same_origin) >= origin_cap:
+                            blocked_tasks.add(old['id']); continue
                 running = conn.execute(select(func.count()).select_from(tasks).where(
                     tasks.c.job_id == old["job_id"], tasks.c.revision == current_job["revision"],
                     tasks.c.generation == current_job["generation"], tasks.c.state == "running",
@@ -426,6 +500,22 @@ class Store:
             self._event(conn, old["job_id"], "task.claimed", {"task_id": old["id"], "worker_id": worker_id, "fence": fence})
             return _out(conn.execute(select(tasks).where(tasks.c.id == old["id"])).first())
 
+    def _workflow_control_valid(self, conn, task, job):
+        """Guard workflow writes using both run and individual node controls."""
+        if task['kind'] != 'workflow':
+            return True
+        binding = task['input']
+        run = self._doc(conn, 'workflow.run', binding.get('run_id'))
+        node = self._doc(conn, 'workflow.node', [binding.get('run_id'), binding.get('node_id')])
+        if not run or not node or run['job_id'] != job['id'] or node['job_id'] != job['id']:
+            return False
+        run, node = run['data'], node['data']
+        return (run.get('status') == 'running'
+                and run.get('control_epoch') == binding.get('run_epoch')
+                and node.get('control_epoch') == binding.get('node_epoch')
+                and node.get('task_id') == task['id']
+                and node.get('status') in ('queued', 'running', 'retry_wait'))
+
     def _owned(self, conn, task_id, worker_id, fence, revision=None):
         task = conn.execute(select(tasks).where(tasks.c.id == task_id)).mappings().first()
         if not task:
@@ -434,7 +524,8 @@ class Store:
         if (task["state"] != "running" or task["worker_id"] != worker_id or task["fence"] != fence
                 or not task["lease_expires_at"] or _utc(task["lease_expires_at"]) <= utcnow()
                 or task["revision"] != job["revision"] or task["generation"] != job["generation"]
-                or (revision is not None and revision != job["revision"])):
+                or (revision is not None and revision != job["revision"])
+                or not self._workflow_control_valid(conn, task, job)):
             raise LeaseLost("expired lease, obsolete revision, or mismatched worker/fence")
         return dict(task)
 
@@ -493,10 +584,22 @@ class Store:
             row = self._doc(conn, "budget", [scope, name])
             return row["data"] if row else None
 
+    def observe_challenge(self, job_id, origin, auth_context, observation=None):
+        from .challenge_policy import observe
+        return observe(self, job_id, origin, auth_context, observation)
+
+    def adapt_challenge(self, challenge_id, evidence=None):
+        from .challenge_policy import adapt
+        return adapt(self, challenge_id, evidence)
+
     def reserve_challenge(self, job_id, origin, auth_context, max_attempts=3, max_active_seconds=120, active_seconds=0):
         if max_attempts < 1 or max_active_seconds <= 0 or active_seconds < 0:
             raise ValueError("invalid challenge budget")
         identity = canonical_digest([origin, auth_context])
+        existing = self.get_challenge(identity)
+        if existing and existing.get('clock') == 'elapsed':
+            from .challenge_policy import reserve
+            return reserve(self, job_id, identity)
         with self._tx() as conn:
             job, now = self._job(conn, job_id), utcnow()
             old = self._doc(conn, "challenge", identity)
@@ -505,9 +608,18 @@ class Store:
                 value = dict(id=identity, origin=origin, auth_context=auth_context,
                     episode=(value["episode"] + 1) if value else 1, state="detected", attempts=0,
                     active_seconds=0.0, max_attempts=max_attempts, max_active_seconds=float(max_active_seconds),
-                    token=None, reserved_at=None, expires_at=None, budget_epoch=1, evidence=None)
+                    token=None, reserved_at=None, expires_at=None, budget_epoch=1, evidence=None,
+                    episode_owner_job_id=job_id, episode_owner_revision=job["revision"], episode_owner_generation=job["generation"])
+            from .challenge_policy import join_policy
+            join_policy(self, conn, value, job, now)
+            owner_job = self._job(conn, value.get('episode_owner_job_id', job_id))
+            if value.get('mode') == 'manual':
+                value.update(state='awaiting_user', stop_reason='manual_policy')
+                self._put(conn, "challenge", identity, value, owner_job)
+                return {**value, "allowed": False, "reason": "manual_policy"}
             if value.get("token"):
                 if _utc(value["expires_at"]) > now:
+                    self._put(conn, "challenge", identity, value, owner_job)
                     return {**value, "allowed": False, "reason": "attempt_in_flight"}
                 # A crashed action consumed its reservation; restart never resets it.
                 value["active_seconds"] += max(0, (_utc(value["expires_at"]) - _utc(value["reserved_at"])).total_seconds())
@@ -515,15 +627,19 @@ class Store:
             value["active_seconds"] += active_seconds
             if value["attempts"] >= value["max_attempts"] or value["active_seconds"] >= value["max_active_seconds"]:
                 value["state"] = "awaiting_user"
-                self._put(conn, "challenge", identity, value, job)
+                self._put(conn, "challenge", identity, value, owner_job)
                 return {**value, "allowed": False, "reason": "budget_exhausted"}
             value.update(attempts=value["attempts"] + 1, state="attempting", token=str(uuid.uuid4()),
-                         reserved_at=now.isoformat(), expires_at=(now + timedelta(seconds=value["max_active_seconds"] - value["active_seconds"])).isoformat())
-            self._put(conn, "challenge", identity, value, job)
+                         reservation_job_id=job_id, reserved_at=now.isoformat(), expires_at=(now + timedelta(seconds=value["max_active_seconds"] - value["active_seconds"])).isoformat())
+            self._put(conn, "challenge", identity, value, owner_job)
             self._event(conn, job_id, "challenge.reserved", {"challenge_id": identity, "episode": value["episode"], "attempt": value["attempts"]})
             return {**value, "allowed": True}
 
     def finish_challenge(self, challenge_id, token, active_seconds=0, resolved=False, evidence=None):
+        existing = self.get_challenge(challenge_id)
+        if existing and existing.get('clock') == 'elapsed':
+            from .challenge_policy import finish
+            return finish(self, challenge_id, token, active_seconds, resolved, evidence)
         if active_seconds < 0:
             raise ValueError("active_seconds must be nonnegative")
         if resolved and not evidence:
@@ -566,6 +682,10 @@ class Store:
             return row["data"] if row else None
 
     def extend_challenge_budget(self, challenge_id, extra_attempts, extra_seconds, authorized_by):
+        existing = self.get_challenge(challenge_id)
+        if existing and existing.get('clock') == 'elapsed':
+            from .challenge_policy import extend
+            return extend(self, challenge_id, extra_attempts, extra_seconds, authorized_by)
         if not authorized_by or extra_attempts < 0 or extra_seconds < 0:
             raise ValueError("an explicit authorizer and nonnegative extension are required")
         with self._tx() as conn:
@@ -650,40 +770,52 @@ class Store:
             self._event(conn, job_id, "control.released", value)
             return value
 
-    def acquire_rate_slot(self, key, interval=3.0):
-        """Reserve a durable request slot; confirm immediately before transmission."""
-        if interval < 0:
-            raise ValueError("request interval must be nonnegative")
+    @staticmethod
+    def _rate_key(key, lane):
+        if lane not in ('main', 'browser_resource'):
+            raise ValueError('Unknown request pacing lane')
+        return key if lane == 'main' else [key, lane]
+
+    def acquire_rate_slot(self, key, interval=3.0, *, lane='main'):
+        """Reserve within one lane without resetting legacy main reservations."""
+        import math
+        if not math.isfinite(interval) or interval < 0:
+            raise ValueError('request interval must be finite and nonnegative')
+        identity = self._rate_key(key, lane)
         with self._tx() as conn:
             now = utcnow()
-            old = self._doc(conn, "rate", key)
-            value = dict(old["data"]) if old else {"key": key, "count": 0, "interval": float(interval),
-                "next_at": None, "blocked_until": None, "last_granted_at": None}
-            value["interval"] = max(value["interval"], float(interval))
-            earliest = max([now] + [_utc(value[name]) for name in ("next_at", "blocked_until") if value.get(name)])
-            value.update(next_at=(earliest + timedelta(seconds=value["interval"])).isoformat(), count=value["count"] + 1)
-            self._put(conn, "rate", key, value)
-            return {"slot_at": earliest.isoformat(), "delay_seconds": max(0, (earliest - now).total_seconds()),
-                    "count": value["count"], "interval": value["interval"]}
+            old = self._doc(conn, 'rate', identity)
+            value = dict(old['data']) if old else {'key': key, 'lane': lane, 'count': 0, 'interval': float(interval),
+                'next_at': None, 'blocked_until': None, 'last_granted_at': None}
+            value['interval'] = max(value['interval'], float(interval))
+            shared = self._doc(conn, 'rate', key) if lane != 'main' else old
+            blocked = shared['data'].get('blocked_until') if shared else None
+            earliest = max([now] + [_utc(point) for point in (value.get('next_at'), blocked) if point])
+            value.update(next_at=(earliest + timedelta(seconds=value['interval'])).isoformat(), count=value['count'] + 1)
+            self._put(conn, 'rate', identity, value)
+            return {'slot_at': earliest.isoformat(), 'delay_seconds': max(0, (earliest - now).total_seconds()),
+                    'count': value['count'], 'interval': value['interval'], 'lane': lane}
 
-    def confirm_rate_slot(self, key, slot_at):
-        """Recheck 429 penalties and serialize actual grants, including queued slots."""
+    def confirm_rate_slot(self, key, slot_at, *, lane='main'):
+        """Every actual grant rechecks the shared origin cooldown and lane spacing."""
+        identity = self._rate_key(key, lane)
         with self._tx() as conn:
-            old = self._doc(conn, "rate", key)
+            old = self._doc(conn, 'rate', identity)
             if old is None:
-                raise KeyError("rate slot was not reserved")
-            value, now = dict(old["data"]), utcnow()
+                raise KeyError('rate slot was not reserved')
+            value, now = dict(old['data']), utcnow()
             candidates = [_utc(slot_at)]
-            if value.get("blocked_until"):
-                candidates.append(_utc(value["blocked_until"]))
-            if value.get("last_granted_at"):
-                candidates.append(_utc(value["last_granted_at"]) + timedelta(seconds=value["interval"]))
+            shared = self._doc(conn, 'rate', key) if lane != 'main' else old
+            if shared and shared['data'].get('blocked_until'):
+                candidates.append(_utc(shared['data']['blocked_until']))
+            if value.get('last_granted_at'):
+                candidates.append(_utc(value['last_granted_at']) + timedelta(seconds=value['interval']))
             due = max(candidates)
             delay = max(0, (due - now).total_seconds())
             if delay == 0:
-                value["last_granted_at"] = now.isoformat()
-                self._put(conn, "rate", key, value)
-            return {"allowed": delay == 0, "delay_seconds": delay, "slot_at": due.isoformat()}
+                value['last_granted_at'] = now.isoformat()
+                self._put(conn, 'rate', identity, value)
+            return {'allowed': delay == 0, 'delay_seconds': delay, 'slot_at': due.isoformat(), 'lane': lane}
 
     def penalize_rate(self, key, seconds):
         if seconds < 0:

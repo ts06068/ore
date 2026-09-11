@@ -5,8 +5,8 @@ from .resolvers import RESOLVERS
 from .searchers import SEARCHERS
 from .packs import load_rune, list_runes
 
-__version__ = "0.1.0"
-__all__ = ["ScholarlyError", "list_sources", "search", "resolve", "load_rune", "list_runes"]
+__version__ = "0.2.0rc2"
+__all__ = ["ScholarlyError", "list_sources", "search", "resolve", "load_rune", "list_runes", "normalize_article_version"]
 
 
 async def search(source, query, *, year_from=None, year_to=None, journals=None,
@@ -27,3 +27,5 @@ async def resolve(source, identifier, config=None) -> dict:
         raise ScholarlyError("operation_unsupported", f"{source} has no full-text resolver in this release.", source=source)
     async with session(values) as client:
         return await RESOLVERS[source](client, identifier, values)
+
+from .versions import normalize_article_version

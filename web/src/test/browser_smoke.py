@@ -60,7 +60,7 @@ try:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={'width':1440, 'height':1050}, device_scale_factor=1)
         page.on('pageerror', lambda error: errors.append(str(error)))
-        page.goto(BASE, wait_until='networkidle')
+        page.goto(BASE.rstrip('/')+'/jobs', wait_until='networkidle')
         page.get_by_label('Operator token').wait_for()
         page.screenshot(path=str(OUTPUT/'login.png'), full_page=True)
         page.get_by_label('Operator token').fill(TOKEN)
@@ -94,6 +94,7 @@ try:
         assert request('/v1/jobs/'+job_id)['status'] == 'paused'
         results.append('explicit_run_and_pause_without_model_workers')
         page.screenshot(path=str(OUTPUT/'mission.png'), full_page=True)
+        page.locator('.sidebar-tools > summary').click()
         page.get_by_role('button', name='Rune library', exact=True).click()
         page.get_by_role('button', name='New Rune', exact=True).click()
         page.get_by_label('Protocol ID').fill('ui-smoke-protocol')

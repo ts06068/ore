@@ -1,6 +1,6 @@
 {
   "schema_version": "ore.rune/v0",
-  "protocol_version": "0.1.0",
+  "protocol_version": "0.2.0",
   "inputs": {
     "publication_window": {
       "basis": "issue_date",
@@ -10,7 +10,7 @@
     "article_scope": "primary_original_research",
     "archive_url": "https://journals.plos.org/plosmedicine/volume"
   },
-  "instructions": "Build the issue inventory from the official archive. Reconcile each issue table of contents with database metadata. Use the publisher article type and abstract to classify primary original research; mark ambiguous types needs_review. Locate the main published PDF and every declared supplementary object. Preserve each format, file identity, license, source, version and parent relationship. Record missing, inaccessible and uninspected items separately. If the site differs from this context, inspect its current page and revise the plan without weakening the contract. Never infer complete coverage from a search-result count.",
+  "instructions": "Build the issue inventory from the official archive. Reconcile each issue table of contents with database metadata. Use the publisher article type and abstract to classify primary original research; mark ambiguous types needs_review. Locate the main published PDF and every declared supplementary object. Preserve each format, file identity, license, source, version and parent relationship. Record missing, inaccessible and uninspected items separately. If the site differs from this context, inspect its current page and revise the plan without weakening the contract. Never infer complete coverage from a search-result count. Use executor-provided snapshot_id values from fetch or browser observations. Seal each locked issue with seal_issue using profile plos-medicine.issue.v1, then seal each article with seal_article using plos-medicine.article.v1. Download only minted candidate_id and requirement_id pairs for the matching registered article. An unrecognized template, incomplete attachment listing, unresolved type, unavailable source or missing final-version evidence remains an audit gap. Do not treat an LLM-declared inventory count as a sealed denominator.",
   "agent": {
     "controller": "llm",
     "model_selection": "runtime_config",
@@ -32,11 +32,20 @@
     ],
     "asset_origins": [],
     "article_versions": [
-      "published"
+      "published_version"
     ],
     "artifact_roles": [
       "main_pdf",
       "supplement"
+    ],
+    "collection_kind": "journal",
+    "coverage_schema": "ore.coverage/v1",
+    "coverage_profiles": {
+      "issue": "plos-medicine.issue.v1",
+      "article": "plos-medicine.article.v1"
+    },
+    "browser_support_origins": [
+      "https://challenges.cloudflare.com"
     ]
   },
   "milestones": [
@@ -71,10 +80,14 @@
     "inventory_reconciled_with_official_toc",
     "included_resources_have_main_pdf_status",
     "included_resources_have_supplement_discovery_status",
-    "article_version_and_license_recorded"
+    "article_version_and_license_recorded",
+    "sealed_issue_identity_manifest",
+    "sealed_article_asset_manifests",
+    "published_version_evidence",
+    "zero_unresolved_required_assets"
   ],
   "limits": {
-    "max_agent_workers": 4,
+    "max_agent_workers": 5,
     "publisher_group_concurrency": 1,
     "origin_min_interval_seconds": 3,
     "transient_retries": 3,
@@ -83,9 +96,13 @@
     "job_budget_ref": "local:research-pilot-budget"
   },
   "on_challenge": {
-    "mode": "bounded_attempt_then_handoff",
+    "policy_version": 2,
+    "mode": "auto",
+    "adaptive": true,
     "max_attempts_per_episode": 3,
-    "max_active_seconds": 120,
+    "max_elapsed_seconds": 120,
+    "hard_max_attempts": 6,
+    "hard_max_elapsed_seconds": 300,
     "budget_scope": "origin_and_auth_context",
     "counter_storage": "orbit",
     "on_exhausted": "awaiting_user",
@@ -152,5 +169,12 @@
       ],
       "live_download_verified": false
     }
-  }
+  },
+  "completeness": "systematic",
+  "coverage_schema": "ore.coverage/v1",
+  "authority_order": [
+    "journal",
+    "publisher",
+    "pmc"
+  ]
 }

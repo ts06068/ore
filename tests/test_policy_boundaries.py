@@ -33,6 +33,7 @@ def test_redaction_preserves_usage_but_hides_credentials():
     value=redact({'access_token':'synthetic-private','usage':{'total_tokens':17},'url':'https://example.org/file?token=synthetic&article=2'})
     assert value['access_token']=='[redacted]' and value['usage']['total_tokens']==17
     assert 'synthetic' not in value['url'] and 'article=2' in value['url']
+    assert 'synthetic' not in redact('https://example.org/?__cf_chl_rt_tk=synthetic&article=2')
 
 def test_routing_never_treats_wrong_version_as_cheaper_equivalent():
     values=rank_candidates([{'url':'a','source':'pmc','version':'accepted'},{'url':'b','source':'publisher','version':'published'}],{'scope':{'article_versions':['published']}})

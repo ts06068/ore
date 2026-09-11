@@ -79,7 +79,9 @@ async def pubmed(client, query, yf, yt, journals, limit, state, sig, config):
                 abstract="\n".join(text(a) for a in item.findall("Abstract/AbstractText")) if item is not None else "",
                 journal=text(item, "Journal/Title"), issns=[text(e) for e in item.findall("Journal/ISSN")] if item is not None else [],
                 volume=text(item, "Journal/JournalIssue/Volume") or None, issue=text(item, "Journal/JournalIssue/Issue") or None,
-                year=year(text(item, "Journal/JournalIssue/PubDate")), authors=authors,
+                # EFetch separates Year/Month/Day; concatenated itertext has no year boundary.
+                # Older citations can instead supply a free-form MedlineDate (first year).
+                year=year(text(item, "Journal/JournalIssue/PubDate/Year")) or year(text(item, "Journal/JournalIssue/PubDate/MedlineDate")), authors=authors,
                 article_type=[text(t) for t in item.findall("PublicationTypeList/PublicationType")] if item is not None else [],
                 urls=[f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"], identifiers=identifiers))
         if {r["id"] for r in records} != set(ids):
@@ -409,7 +411,12 @@ async def scopus(client, query, yf, yt, journals, limit, state, sig, config):
     headers = {"X-ELS-APIKey": key, "Accept": "application/json"}
     if insttoken:
         headers["X-ELS-Insttoken"] = insttoken
-    provider_query = query if config.get("query_mode") == "native" else f"TITLE-ABS-KEY({quoted(query)})"
+    mode = config.get("query_mode", "plain")
+    if mode not in ("plain", "native"):
+        raise ScholarlyError("invalid_query_mode", "Scopus query_mode must be plain or native.", source=source)
+    if mode == "plain" and re.search(r"\b(?:TITLE-ABS-KEY|TITLE|ABS|KEY|DOCTYPE|PUBYEAR|SRCTITLE|ISSN)\s*\(", query, re.I):
+        raise ScholarlyError("query_mode_required", "Scopus field syntax requires query_mode=native; otherwise supply only the phrase text.", source=source)
+    provider_query = query if mode == "native" else f"TITLE-ABS-KEY({quoted(query)})"
     if yf is not None:
         provider_query = f"({provider_query}) AND PUBYEAR > {yf - 1}"
     if yt is not None:

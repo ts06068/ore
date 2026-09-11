@@ -6,6 +6,7 @@ Mount with ``app.include_router(create_worker_router(engine))`` behind the same
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -72,7 +73,12 @@ def create_worker_router(engine):
         return {'id': ident}
 
     @router.post('/{worker}/claim')
-    async def claim(worker: str):
+    async def claim(worker: str, request: Request):
+        raw = await request.body()
+        data = json.loads(raw) if raw else {}
+        job_ids = data.get('job_ids')
+        if job_ids is not None and (not isinstance(job_ids, list) or not all(isinstance(item, str) for item in job_ids)):
+            raise HTTPException(422, 'job_ids must be an array of job IDs or null')
         host = registered(worker)
         if host.get('task_id'):
             current = engine.store.get_task(host['task_id'])
@@ -86,6 +92,8 @@ def create_worker_router(engine):
                     return {'task': None, 'reason': 'worker_already_running'}
         unavailable = []
         for job in engine.store.list_jobs():
+            if job_ids is not None and job['id'] not in job_ids:
+                continue
             if job['status'] not in ACTIVE:
                 continue
             backend = job['mission'].get('backend', 'codex')
@@ -97,6 +105,7 @@ def create_worker_router(engine):
                 eligible = []
                 for kind in {task['kind'] for task in engine.store.tasks(job['id'])
                              if task['revision'] == job['revision'] and task['generation'] == job['generation']}:
+                    if kind == 'workflow':continue  # Workflow scheduler owns graph/epoch semantics.
                     try:
                         engine.routing_for(job, kind, catalog=host.get('models', []))
                     except (AccessDenied, ValueError):
@@ -141,9 +150,12 @@ def create_worker_router(engine):
         job = engine.store.get_job(task['job_id'])
         # Paused attempts can settle, but cannot renew or perform more actions.
         if action == 'fail':
-            state = job['status'] if job['status'] in PAUSED else 'cancelled' if job['status'] == 'cancelled' else 'blocked'
+            state = job['status'] if job['status'] in PAUSED else 'cancelled' if job['status'] == 'cancelled' else 'awaiting_user' if data.get('state') == 'awaiting_user' else 'blocked'
             result = engine.store.fail_task(task_id, worker, fence, redact(data.get('error', {})), task['revision'], state=state)
             release_runtime(task)
+            execution = getattr(engine, 'execution', None)
+            if execution and execution.enabled:
+                await execution.release_task(task)
             remember({'id': worker, 'state': 'idle', 'task_id': None})
             engine.reconcile(job['id'])
             return result
@@ -185,6 +197,9 @@ def create_worker_router(engine):
             return engine.model_observation(job['mission'], {'result': result, 'image_url': runtime.last_image})
         result = engine.store.finish_task(task_id, worker, fence, data.get('result', {}), task['revision'])
         release_runtime(task)
+        execution = getattr(engine, 'execution', None)
+        if execution and execution.enabled:
+            await execution.release_task(task)
         remember({'id': worker, 'state': 'idle', 'task_id': None})
         engine.reconcile(job['id'])
         return result

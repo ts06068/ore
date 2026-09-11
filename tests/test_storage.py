@@ -20,5 +20,5 @@ def test_s3_readback_and_local_original(tmp_path):
 def test_initial_migration_is_repeatable(tmp_path):
     url='sqlite:///'+str(tmp_path/'migrate.db');upgrade(url);upgrade(url)
     engine=create_engine(url)
-    with engine.connect() as c:assert c.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0001'
+    with engine.connect() as c:assert c.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0002'
     engine.dispose()

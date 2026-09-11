@@ -16,11 +16,24 @@ class Settings(BaseSettings):
     auth_token: str | None = None
     codex_bin: str | None = None
     browser_executable: str | None = None
+    browser_backend: str = "playwright"
+    desktop_image: str = "ore-desktop:0.2.0rc1"
+    desktop_host_state_dir: Path | None = None
+    desktop_resource_mode: str = "cgroup"
     browser_headless: bool = True
     browser_proxy: str | None = None
     host: str = '127.0.0.1'
     port: int = 8765
-    max_workers: int = 4
+    max_workers: int = 5
+    scheduler_global_limit: int = 64
+    scheduler_interval_seconds: float = 15.0
+    pool_token: str | None = None
+    pool_max_executors: int = 64
+    pool_idle_seconds: float = 120.0
+    execution_backend: str = 'local'
+    executor_enrollment_token: str | None = None
+    executor_network_zone: str = 'default'
+    executor_lease_seconds: int = 120
     def prepare(self):
         self.state_dir = self.state_dir.resolve()
         self.state_dir.mkdir(parents=True,exist_ok=True,mode=0o700)

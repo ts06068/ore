@@ -60,7 +60,7 @@
     "output_contract_satisfied_or_unresolved_recorded"
   ],
   "limits": {
-    "max_agent_workers": 4,
+    "max_agent_workers": 5,
     "publisher_group_concurrency": 1,
     "origin_min_interval_seconds": 3,
     "transient_retries": 3,
@@ -69,9 +69,13 @@
     "job_budget_ref": "local:research-pilot-budget"
   },
   "on_challenge": {
-    "mode": "bounded_attempt_then_handoff",
+    "policy_version": 2,
+    "mode": "auto",
+    "adaptive": true,
     "max_attempts_per_episode": 3,
-    "max_active_seconds": 120,
+    "max_elapsed_seconds": 120,
+    "hard_max_attempts": 6,
+    "hard_max_elapsed_seconds": 300,
     "budget_scope": "origin_and_auth_context",
     "counter_storage": "orbit",
     "on_exhausted": "awaiting_user",

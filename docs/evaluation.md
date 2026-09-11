@@ -1,3 +1,5 @@
+> The measured calibration below belongs to the 0.1 runtime. ORE 0.2 checks the current core, scholarly profiles, interpreter and dependency fingerprint before accepting a downgrade; these earlier results do not authorize 0.2 automatic lower-tier routing.
+
 # Paired routing evaluation
 
 `ore.evaluation` compares **fixed Astra/high against automatic routing or an explicitly selected fixed experimental candidate inside the same ORE implementation**. Both arms receive the same mission content, exact Rune, finite reference set, source fixture identity and worker budget. It does not compare ORE with a plain agent, so its results cannot establish architectural superiority.

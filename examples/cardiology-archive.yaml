@@ -16,8 +16,20 @@ routing: {mode: auto}
 budget:
   max_turns: 100
   max_seconds: 3600
-  max_agent_workers: 4
+  max_agent_workers: 10
   max_bytes: 1000000000
+parallelism:
+  initial: 5
+  mode: adaptive
+  per_origin: 1
+retrieval_policy:
+  mode: api_open_access_first
+  browser_fallback: true
 on_challenge:
+  policy_version: 2
+  mode: auto
+  adaptive: true
   max_attempts_per_episode: 3
-  max_active_seconds: 120
+  max_elapsed_seconds: 120
+  hard_max_attempts: 6
+  hard_max_elapsed_seconds: 300

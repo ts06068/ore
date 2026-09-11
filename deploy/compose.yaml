@@ -2,6 +2,13 @@ name: ore
 services:
   postgres:
     image: postgres:16
+    cpus: 2.0
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 256
+    shm_size: 256mb
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
     environment:
       POSTGRES_DB: ore
       POSTGRES_USER: ore
@@ -14,27 +21,34 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: [ore-backend]
+    networks: [ore-data]
   coordinator:
-    image: ore-engine:0.1.0
+    image: ore-coordinator:0.2.0rc1
+    cpus: 2.0
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 256
     build:
       context: ..
       dockerfile: Dockerfile
+      target: coordinator
     environment:
       ORE_AUTH_TOKEN: ${ORE_AUTH_TOKEN:?Set ORE_AUTH_TOKEN in the deployment environment}
+      ORE_EXECUTOR_ENROLLMENT_TOKEN: ${ORE_EXECUTOR_ENROLLMENT_TOKEN:?Set a separate executor enrollment token}
       ORE_DATABASE_URL: postgresql+psycopg://ore:${ORE_POSTGRES_PASSWORD:?Set ORE_POSTGRES_PASSWORD}@postgres:5432/ore
       ORE_STATE_DIR: /var/lib/ore
       ORE_WEB_DIR: /app/web/dist
       ORE_MAX_WORKERS: "0"
-      ORE_BROWSER_HEADLESS: "true"
+      ORE_EXECUTION_BACKEND: remote
+      ORE_VALIDATOR_URL: http://validator:8770
+      ORE_VALIDATOR_TOKEN: ${ORE_VALIDATOR_TOKEN:?Set a separate validator token}
     ports:
       - "127.0.0.1:${ORE_PORT:-8765}:8765"
     volumes:
       - ore-state:/var/lib/ore
-    shm_size: 1gb
     read_only: true
     tmpfs:
-      - /tmp:rw,nosuid,size=1g
+      - /tmp:rw,nosuid,nodev,size=1g
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
@@ -42,9 +56,66 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    networks: [ore-backend]
+    networks: [ore-data, ore-control, ore-validation]
+  executor:
+    image: ore-executor:0.2.0rc1
+    cpus: 2.0
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 512
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: executor
+    environment:
+      ORE_EXECUTOR_ENROLLMENT_TOKEN: ${ORE_EXECUTOR_ENROLLMENT_TOKEN:?Set a separate executor enrollment token}
+      ORE_EXECUTOR_NETWORK_ZONE: ${ORE_EXECUTOR_NETWORK_ZONE:-default}
+      ORE_BROWSER_HEADLESS: "true"
+      ORE_VALIDATOR_URL: http://validator:8770
+      ORE_VALIDATOR_TOKEN: ${ORE_VALIDATOR_TOKEN:?Set a separate validator token}
+    command: ["--server", "http://coordinator:8765"]
+    deploy:
+      replicas: ${ORE_EXECUTOR_REPLICAS:-2}
+    shm_size: 1gb
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=2g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ore-control, ore-validation]
+  validator:
+    image: ore-executor:0.2.0rc1
+    cpus: 2.0
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 128
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: executor
+    entrypoint: ["python3", "-m", "ore.validation"]
+    command: []
+    environment:
+      ORE_VALIDATOR_TOKEN: ${ORE_VALIDATOR_TOKEN:?Set a separate validator token}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped
+    networks: [ore-validation]
 networks:
-  ore-backend:
+  ore-data:
+    internal: true
+  ore-control:
+  ore-validation:
+    internal: true
 volumes:
   postgres-data:
   ore-state:

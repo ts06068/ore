@@ -1,7 +1,7 @@
 import { AlertCircle, ArrowUpRight, LoaderCircle, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { label, safeUrl } from '../lib/format';
-export function Logo(){return <div className="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 2 37 12v16L20 38 3 28V12zm0 8-10 6v8l10 6 10-6v-8z" fill="currentColor"/></svg><span>ORE<span className="brand-dot">.</span></span></div>;}
+export function Logo({symbol=false,className=''}:{symbol?:boolean;className?:string}){const asset=symbol?'ore-symbol':'ore-original';return <span className={`brand ${symbol?'brand-symbol':''} ${className}`}><img className="brand-light" src={`/brand/${asset}.svg`} alt="ORE"/><img className="brand-dark" src={`/brand/${symbol?'ore-symbol-inverse':'ore-inverse'}.svg`} alt="" aria-hidden="true"/></span>;}
 export function Status({value='unknown'}:{value?:string}){return <span className={`status status-${value}`}><i/>{label(value)}</span>;}
 export function Spinner(){return <LoaderCircle size={16} className="spin" aria-label="Loading"/>;}
 export function Empty({icon,title,children,action}:{icon?:ReactNode;title:string;children?:ReactNode;action?:ReactNode}){return <div className="empty">{icon&&<div className="empty-icon">{icon}</div>}<h3>{title}</h3><p>{children}</p>{action}</div>;}

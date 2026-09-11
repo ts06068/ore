@@ -51,13 +51,14 @@ def sdk_install_smoke(tarball: Path) -> None:
     node = shutil.which('node')
     docker = shutil.which('docker')
     native = bool(node and shutil.which('npm'))
-    package = str(tarball) if native else f'/repo/dist/{tarball.name}'
+    package = str(tarball) if native else '/repo/' + str(tarball.relative_to(ROOT))
     script = """const fs=require('node:fs');const os=require('node:os');const path=require('node:path');
 const {execFileSync}=require('node:child_process');const {pathToFileURL}=require('node:url');
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'ore-sdk-install-'));
 (async()=>{try{execFileSync('npm',['install','--prefix',temp,'--ignore-scripts','--no-audit','--no-fund',PACKAGE],{stdio:'inherit'});
 const sdk=await import(pathToFileURL(path.join(temp,'node_modules/@ore/sdk/dist/index.js')).href);
 if(typeof sdk.OreClient!=='function'||typeof sdk.parseEventStream!=='function')throw Error('SDK exports missing');
+for(const name of ['createConversation','sendMessage','approvePlan','listConnections','listConversationFolders','branchConversation','interruptConversation','resumeConversation','conversationEvents'])if(typeof sdk.OreClient.prototype[name]!=='function')throw Error('SDK conversation method missing: '+name);
 console.log('SDK_CLEAN_INSTALL_OK');}finally{fs.rmSync(temp,{recursive:true,force:true});}})().catch(error=>{console.error(error);process.exit(1)});
 """.replace('PACKAGE', json.dumps(package))
     if native:
@@ -81,6 +82,7 @@ def manifest_entry(path: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=ROOT / 'dist', help='Separate versioned output directory preserves previous release artifacts.')
     parser.add_argument('--skip-web-build', action='store_true',
                         help='Use an already built SDK and web/dist; still package and install-test them.')
     args = parser.parse_args()
@@ -89,8 +91,9 @@ def main() -> None:
     uv = shutil.which('uv')
     if not uv:
         parser.error('uv is required; install it before running the release build.')
-    output = ROOT / 'dist'
-    output.mkdir(exist_ok=True)
+    output = args.output.resolve()
+    output.relative_to(ROOT)  # Docker packaging requires a path inside this checkout.
+    output.mkdir(parents=True, exist_ok=True)
     if not args.skip_web_build:
         for directory in ['packages/sdk', 'web']:
             npm(directory, 'ci', '--no-audit', '--no-fund')
@@ -101,7 +104,7 @@ def main() -> None:
             raise RuntimeError(f'Missing build output: {relative}. Run without --skip-web-build.')
     sdk = json.loads((ROOT / 'packages/sdk/package.json').read_text())
     # Relative destination works identically in native npm and the Docker mount.
-    npm('packages/sdk', 'pack', '--pack-destination', '../../dist')
+    npm('packages/sdk', 'pack', '--pack-destination', os.path.relpath(output, ROOT / 'packages/sdk'))
     versions = {}
     for directory, package in [('.', 'ore_engine'), ('packages/ore-scholarly', 'ore_scholarly')]:
         metadata = tomllib.loads((ROOT / directory / 'pyproject.toml').read_text())
@@ -112,15 +115,32 @@ def main() -> None:
     artifacts = [engine_wheel, output / f'ore_engine-{versions["ore_engine"]}.tar.gz',
                  scholarly_wheel, output / f'ore_scholarly-{versions["ore_scholarly"]}.tar.gz',
                  output / f'ore-sdk-{sdk["version"]}.tgz']
+    companion_zip = output / f'ore-chrome-companion-{versions["ore_engine"]}.zip'
+    with zipfile.ZipFile(companion_zip, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted((ROOT / 'src/ore/companion_extension').iterdir()):
+            if path.suffix in {'.js', '.json', '.html'}:
+                archive.write(path, path.name)
+    artifacts.append(companion_zip)
     for path in artifacts:
         if not path.is_file():
             raise RuntimeError(f'Build did not produce expected artifact: {path}')
     with zipfile.ZipFile(engine_wheel) as archive:
         names = archive.namelist()
         assert 'ore/static/index.html' in names, 'Engine wheel is missing the console.'
+        for module in ('claude', 'connections', 'connection_agent', 'provider_auth', 'credentials', 'source_wait', 'conversation_authority', 'conversation_contracts', 'conversation_library', 'conversation', 'conversation_api', 'public_stream', 'progress', 'workflow', 'workflow_adaptation', 'workflow_native', 'workflow_context', 'workflow_completion', 'workflow_recipes', 'agent_sessions', 'recipes', 'run_budget', 'planner_context', 'capabilities', 'sandbox', 'scheduler', 'pool', 'host_pool', 'challenge_policy', 'challenge_service'):
+            assert f'ore/{module}.py' in names, f'Engine wheel is missing {module}'
+        assert 'ore/companion_extension/manifest.json' in names, 'Engine wheel is missing the Chrome companion.'
+        assert 'ore/companion_extension/background.js' in names
+        for filename in ('Dockerfile', 'control.py', 'entrypoint.py', 'seccomp-chrome.json'):
+            assert 'ore/desktop_assets/' + filename in names, 'Desktop runtime assets missing from engine wheel'
         assert any(name.startswith('ore/static/assets/') and name.endswith('.js') for name in names)
+        assert any(name.startswith('ore/static/assets/') and name.endswith('.woff2') for name in names), 'Local fonts missing'
+        for asset in ('brand/ore-original.svg','brand/ore-symbol.svg','fonts/inter-LICENSE.txt','fonts/noto-sans-kr-LICENSE.txt'):
+            assert 'ore/static/'+asset in names, 'Brand or font license missing: '+asset
     with tarfile.open(artifacts[1]) as archive:
         assert any(name.endswith('/web/dist/index.html') for name in archive.getnames())
+        for required in ('scripts/acceptance_workflow_runtime.py','scripts/benchmark_architecture.py','scripts/benchmark_fixtures.py','scripts/benchmark_architecture_v2.py','scripts/benchmark_fixtures_v2.py','scripts/benchmark_evaluation_v2.py','ORE_Original.svg','web/public/brand/ore-original.svg'):
+            assert any(name.endswith('/'+required) for name in archive.getnames()), 'Source asset missing: '+required
     for path in artifacts[:4]:
         if path.suffix == '.whl':
             with zipfile.ZipFile(path) as archive:
@@ -136,7 +156,10 @@ def main() -> None:
         run([uv, 'venv', '--python', sys.executable, str(environment)])
         python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         ore = environment / ('Scripts/ore.exe' if os.name == 'nt' else 'bin/ore')
-        run([uv, 'pip', 'install', '--python', str(python), str(engine_wheel), str(scholarly_wheel)])
+        run([uv, 'pip', 'install', '--python', str(python), str(engine_wheel)])
+        core_smoke = run([str(python), '-c', "from importlib.util import find_spec; from ore.engine import Engine; from ore.source_policy import source_catalog; from ore.evaluation import runtime_fingerprint; assert find_spec('ore_scholarly') is None; assert source_catalog()==[]; assert runtime_fingerprint()['digest']; print('CORE_ONLY_INSTALL_OK')"], temporary, capture=True)
+        assert 'CORE_ONLY_INSTALL_OK' in core_smoke
+        run([uv, 'pip', 'install', '--python', str(python), str(scholarly_wheel)])
         code = '''import json
 from importlib.metadata import version
 from importlib.resources import files
@@ -146,22 +169,31 @@ from ore.server import create_app
 root = files('ore') / 'static'
 assert (root / 'index.html').is_file()
 assert list((root / 'assets').iterdir())
+assert (files('ore') / 'desktop_assets' / 'seccomp-chrome.json').is_file()
+from ore.desktop import DesktopRuntime
+assert DesktopRuntime.__name__ == 'DesktopRuntime'
 assert ore_scholarly.list_sources()
 assert ore_scholarly.list_runes()
+from ore.capabilities import CapabilityRegistry
+from ore.conversation import ConversationManager
+from ore.workflow import WorkflowManager
 print(json.dumps({'ore_engine': version('ore-engine'), 'ore_scholarly': version('ore-scholarly'), 'packaged_ui': True}))
 '''
         smoke = json.loads(run([str(python), '-c', code], temporary, capture=True))
         run([str(ore), '--help'], temporary)
+        run([uv, 'pip', 'install', '--python', str(python), str(engine_wheel) + '[claude]'])
+        run([str(python), '-c', "from ore.claude import sdk_module, ClaudeBackend; sdk=sdk_module(); assert hasattr(sdk, 'ClaudeSDKClient'); print('CLAUDE_OPTIONAL_INSTALL_OK')"], temporary)
         # Rebuild the core wheel from its actual source distribution with no source checkout.
         rebuilt = temporary / 'rebuilt'
         run([uv, 'build', '--wheel', '--out-dir', str(rebuilt), str(artifacts[1])], temporary)
         with zipfile.ZipFile(next(rebuilt.glob('ore_engine-*.whl'))) as archive:
             assert 'ore/static/index.html' in archive.namelist()
+            assert 'ore/desktop_assets/seccomp-chrome.json' in archive.namelist()
     sdk_install_smoke(artifacts[4])
     entries = [manifest_entry(path) for path in artifacts]
     manifest = {'created_at': datetime.now(timezone.utc).isoformat(), 'published': False,
                 'frontend': 'prebuilt' if args.skip_web_build else 'built_and_tested',
-                'clean_install': smoke, 'cli_help': 'passed', 'sdist_rebuild': 'passed', 'sdk_clean_install': 'passed',
+                'clean_install': smoke, 'core_only_install': 'passed', 'claude_optional_install': 'passed', 'cli_help': 'passed', 'sdist_rebuild': 'passed', 'sdk_clean_install': 'passed',
                 'artifacts': entries}
     (output / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (output / 'SHA256SUMS').write_text(''.join(f'{item["sha256"]}  {item["file"]}\n' for item in entries))

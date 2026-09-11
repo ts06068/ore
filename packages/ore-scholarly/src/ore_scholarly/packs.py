@@ -20,7 +20,7 @@ def load_rune(name: str) -> dict:
     if not isinstance(name, str) or "/" in name or "\\" in name or name.startswith("."):
         raise ScholarlyError("invalid_rune", "Use a packaged Rune name from list_runes().")
     name = name.removeprefix("journal.").removesuffix(".json")
-    aliases = {"plos_medicine": "plos-medicine", "jama_cardiology": "jama-cardiology", "general.web": "general-web", "general_web": "general-web"}
+    aliases = {"plos_medicine": "plos-medicine", "jama_cardiology": "jama-cardiology", "general.web": "general-web", "general_web": "general-web", "kiss.search": "kiss", "riss.search": "riss"}
     name = aliases.get(name, name)
     path = files("ore_scholarly").joinpath("runes", name + ".json")
     if not path.is_file():

@@ -33,3 +33,14 @@ HEALTHCHECK --interval=20s --timeout=5s --start-period=30s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=4)" || exit 1
 ENTRYPOINT ["ore"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8765", "--workers", "0"]
+
+# Separate runtime roles: executors hold only private tmpfs browser/download state.
+FROM runtime AS executor
+ENV ORE_CONTAINER_EXECUTOR=1 \
+    ORE_EXECUTOR_STATE_DIR=/tmp/ore-executor
+HEALTHCHECK NONE
+ENTRYPOINT ["python3", "-m", "ore.executor"]
+CMD ["--server", "http://coordinator:8765"]
+
+FROM runtime AS coordinator
+ENV ORE_EXECUTION_BACKEND=remote

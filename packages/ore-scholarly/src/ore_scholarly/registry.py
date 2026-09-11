@@ -68,6 +68,9 @@ def list_sources(config: dict | None = None) -> list[dict]:
     for source in SOURCES:
         entry = copy.deepcopy(source)
         _, values = source_config(source["id"], config)
+        active_credentials = [row for row in values.get('credential_pool', []) if isinstance(row, dict) and row.get('enabled') is not False and row.get('api_key_ref')]
+        if active_credentials and not values.get('api_key_ref'):
+            values['api_key_ref'] = active_credentials[0]['api_key_ref']
         configured = True
         for name, default_env in source["credentials"].items():
             if name + "_ref" in values:

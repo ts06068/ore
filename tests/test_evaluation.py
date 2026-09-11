@@ -12,7 +12,7 @@ import ore.engine as engine_module
 from ore.config import Settings
 from ore.engine import Engine
 from ore.evaluation import (BASELINE_EFFORT, BASELINE_MODEL, SCHEMA_VERSION, EvaluationError,
-                            evaluate_job, load_evaluation_report, run_paired_evaluation, validate_routing_profile)
+                            evaluate_job, load_evaluation_report, run_paired_evaluation, validate_routing_profile, runtime_fingerprint)
 from ore.models import Mission, canonical_digest
 from test_engine import ScriptedBackend, decision, engine
 
@@ -123,7 +123,7 @@ pytest temporary directories and are not produced by an empirical evaluation.
     return {"schema_version": SCHEMA_VERSION, "comparison": "fixed_astra_vs_auto_same_runtime",
             "evidence_kind": "empirical", "synthetic": False, "protocol_digest": cases[0]["baseline"]["protocol_digest"],
             "kind": "classify", "fixture_ids": [item["fixture_id"] for item in cases], "cases": cases,
-            "runtime_changed_during_evaluation": False}
+            "runtime_changed_during_evaluation": False, "runtime": runtime_fingerprint()}
 
 
 def store_test_envelope(tmp_path, report):
@@ -166,6 +166,8 @@ def test_validator_binds_sha_protocol_kind_and_all_fixture_ids(tmp_path):
     (lambda r: r["cases"][0]["routed"].update(semantic_input_digest="changed"), "paired_inputs_differ"),
     (lambda r: r["cases"][0]["routed"]["manifest"].update(included_resource_keys=["wrong"]), "output_manifest_digest_mismatch"),
     (lambda r: r.update(runtime_changed_during_evaluation=True), "runtime_equivalence_not_established"),
+    (lambda r: r["runtime"].update(digest="previous-build"), "evaluation_runtime_differs_from_current_runtime"),
+    (lambda r: r.pop("runtime"), "evaluation_runtime_differs_from_current_runtime"),
 ])
 def test_validator_rejects_unproven_or_degraded_pairs(tmp_path, change, expected_reason):
     report = report_envelope_for_validator_tests()
@@ -271,3 +273,8 @@ def test_validator_requires_rehashed_evidence_for_every_manifest_artifact(tmp_pa
         item[arm]["artifacts"] = []  # A claimed manifest hash without original-byte measurement is insufficient.
     _, profile = store_test_envelope(tmp_path, report)
     assert "artifact_measurements_do_not_match_manifest" in check(tmp_path, profile)["reasons"]
+
+
+def test_runtime_fingerprint_includes_companion_execution_assets():
+    files=runtime_fingerprint()["files"]
+    assert {"ore/companion_extension/background.js", "ore/companion_extension/protocol.js", "ore/companion_extension/manifest.json"}.issubset(files)

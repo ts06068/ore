@@ -14,6 +14,32 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pypdf import PdfReader
+from defusedxml import ElementTree as SafeET
+from defusedxml.common import DefusedXmlException
+
+
+STRONG_FORMATS = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".zip": "application/zip",
+}
+
+
+def _known_api_error_xml(path: Path, count: int) -> bool:
+    # Europe PMC returns this explicit error envelope with HTTP 200. Keep this
+    # bounded and structural; ordinary HTML/XML supplementary files stay valid.
+    if count > 64 * 1024:
+        return False
+    try:
+        root = SafeET.fromstring(path.read_bytes())
+    except (SafeET.ParseError, DefusedXmlException):
+        return False
+    local = lambda tag: tag.rsplit("}", 1)[-1]
+    fields = {local(child.tag): child for child in root}
+    return (local(root.tag) == "errorBean" and "errCode" in fields and "errMsg" in fields
+            and bool("".join(fields["errMsg"].itertext()).strip()))
 
 
 class VaultError(RuntimeError):
@@ -188,10 +214,22 @@ def _pdf_identity(reader: PdfReader, expected: dict[str, Any]) -> tuple[str, dic
     front = reader.pages[0].extract_text() or "" if reader.pages else ""
     metadata_title = str((reader.metadata or {}).get("/Title", ""))
     normalized = _normal(front[:12_000] + " " + metadata_title)
-    title_match = bool(title and len(_normal(title)) >= 8 and _normal(title) in normalized)
+    normalized_title = _normal(title)
+    title_match = bool(title and len(normalized_title) >= 8 and normalized_title in normalized)
+    title_match_method = "normalized_exact" if title_match else None
     observed_dois = [item.rstrip(".,;)") for item in re.findall(r"10\.\d{4,9}/[^\s<>\"\]]+", front.lower())]
     doi_match = bool(doi and doi in observed_dois)
+    # PDF positioning can omit word spaces or insert them inside words. Permit
+    # only an exact complete long title in the first-page header, independently
+    # anchored by the expected DOI; do not use fuzzy or partial-title matching.
+    compact_title = normalized_title.replace(" ", "")
+    if (not title_match and doi_match and len(compact_title) >= 40
+            and len(normalized_title.split()) >= 6
+            and compact_title in _normal(front[:2_000]).replace(" ", "")):
+        title_match = True
+        title_match_method = "doi_guarded_spacing_exact"
     evidence = {"method": "first_page_and_pdf_metadata", "title_match": title_match,
+                "title_match_method": title_match_method,
                 "doi_match": doi_match, "observed_dois": observed_dois[:20]}
     if title_match and (not doi or doi_match or not observed_dois):
         return "verified", evidence
@@ -251,6 +289,20 @@ class Vault:
             if wants_pdf and media_type != "application/pdf":
                 issues.append("expected_pdf_received_" + media_type)
                 identity = "unknown"
+            declared_format = STRONG_FORMATS.get(Path(expected.get("filename") or source.name).suffix.lower())
+            required_formats = {declared_format, expected.get("media_type")} & set(STRONG_FORMATS.values())
+            for required in sorted(required_formats):
+                # OOXML documents are valid ZIP containers too; their more
+                # specific extensions still require the matching document type.
+                compatible = media_type == required or (required == "application/zip"
+                    and media_type in set(STRONG_FORMATS.values()) - {"application/pdf"})
+                if not compatible:
+                    label = next(ext[1:] for ext, value in STRONG_FORMATS.items() if value == required)
+                    issue = "expected_" + label + "_received_" + media_type
+                    if issue not in issues:
+                        issues.append(issue)
+            if media_type in ("application/xml", "text/xml", "text/plain") and _known_api_error_xml(snapshot, count):
+                issues.append("api_error_xml_envelope")
             if media_type == "application/pdf":
                 try:
                     with snapshot.open("rb") as stream:

@@ -196,3 +196,16 @@ async def test_remote_decision_usage_observed_before_action(setup):
             'fence': task['fence'], 'usage': {'totalTokens': 10}})
         assert response.status_code == 403
         assert any(event['type'] == 'agent_decision' for event in engine.store.events(job['id']))
+
+
+@pytest.mark.asyncio
+async def test_worker_claim_can_restrict_exact_jobs_and_empty_means_none(setup):
+    engine, app = setup
+    first = job_with_task(engine)
+    second = job_with_task(engine)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        await client.post('/v1/workers/register', json={'id': 'filtered', 'models': catalog('model-a')})
+        assert (await client.post('/v1/workers/filtered/claim', json={'job_ids': []})).json()['task'] is None
+        offer = (await client.post('/v1/workers/filtered/claim', json={'job_ids': [first['id']]})).json()
+        assert offer['task']['job_id'] == first['id']
+        assert engine.store.tasks(second['id'])[0]['state'] == 'queued'

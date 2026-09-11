@@ -1,5 +1,7 @@
 # 사용자 요구사항 대비 ORE 0.1.0 감사
 
+> 구현 전의 역사적 감사입니다. 현재 구현과 검증 결과는 [0.2 release guide](release-0.2.md)와 [VALIDATION](../VALIDATION.md)을 참조하세요.
+
 2026-09-10 코드 및 실행 기록을 대조했다. 이번 감사에서는 실행 코드를 수정하지 않았다. **현재 패키지는 요청한 20년 전수 수집 제품의 완료 상태가 아니다.** 종전의 설치·단위 테스트·소규모 acceptance 성공을 전체 제품 요구사항 충족으로 해석하면 안 된다.
 
 ## 1. 사용자 인계
@@ -36,7 +38,7 @@
 
 최초 실행은 운영자 토큰 로그인 후 Missions 화면이다. Clarivate/Elsevier 가입·기관 확인·키 발급/승인 추적 wizard가 없다. 이번 등록은 별도 일회성 보조 스크립트와 operator browser를 이용해 진행했으며 일반 사용자 onboarding 흐름에 연결되어 있지 않다. 모든 사용자에게 두 계정을 필수로 강제할 이유도 없고, 선택한 source에 필요한 계정만 안내해야 한다.
 
-근거: `web/src/App.tsx:21,28,37`, `web/src/components/ConnectionsView.tsx:13`, `scripts/onboard_accounts.py:13`.
+근거: `web/src/App.tsx:21,28,37`, `web/src/components/ConnectionsView.tsx:13`, 로컬 계정 등록 점검 스크립트 (배포 제외).
 
 ## 5. ETA
 

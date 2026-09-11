@@ -86,6 +86,21 @@ class ScholarlyTests(unittest.IsolatedAsyncioTestCase):
             await search("pubmed", "trial", limit=1, cursor=encode_cursor("pubmed", sig, offset=10000), config=config)
         self.assertEqual(cm.exception.code, "result_cap")
 
+    async def test_pubmed_year_uses_structured_date_then_medline_date(self):
+        dates = ["<Year>2024</Year><Month>Jan</Month><Day>2</Day>",
+                 "<MedlineDate>2023 Dec-2024 Jan</MedlineDate>",
+                 "<Year>2024</Year><MedlineDate>2023 Dec</MedlineDate>",
+                 "<Month>Jan</Month><Day>2</Day>"]
+        def handle(request):
+            if request.url.path.endswith("esearch.fcgi"):
+                return httpx.Response(200, json={"esearchresult": {"count": "4", "idlist": ["1", "2", "3", "4"]}})
+            articles = "".join(f"<PubmedArticle><MedlineCitation><PMID>{i}</PMID><Article>"
+                f"<Journal><JournalIssue><PubDate>{date}</PubDate></JournalIssue></Journal>"
+                "</Article></MedlineCitation></PubmedArticle>" for i, date in enumerate(dates, 1))
+            return xml("<PubmedArticleSet>" + articles + "</PubmedArticleSet>")
+        result = await search("pubmed", "trial", limit=4, config={"transport": httpx.MockTransport(handle)})
+        self.assertEqual([row["year"] for row in result["records"]], [2024, 2023, 2024, None])
+
     async def test_kci_page_remainder_and_oai_datestamp(self):
         calls = []
         def handle(request):
@@ -195,7 +210,8 @@ class ScholarlyTests(unittest.IsolatedAsyncioTestCase):
                 {"version":"acceptedVersion","url_for_pdf":"https://repo.example/accepted.pdf","license":"cc-by"},
                 {"version":"publishedVersion","url_for_pdf":None,"url_for_landing_page":"https://publisher.example/article"}]})
         result=await resolve("unpaywall","https://doi.org/10.1234/OA",config=secrets(transport=httpx.MockTransport(handle)))
-        self.assertEqual([r["version"] for r in result["candidates"]],["acceptedVersion","publishedVersion"])
+        self.assertEqual([r["version"] for r in result["candidates"]],["accepted_manuscript","published_version"])
+        self.assertEqual([r["version_raw"] for r in result["candidates"]],["acceptedVersion","publishedVersion"])
         self.assertEqual([r["role"] for r in result["candidates"]],["main_pdf","landing_page"])
         self.assertEqual(result["supplement_status"],"not_supported")
         self.assertTrue(all(not r["downloaded"] for r in result["candidates"]))
@@ -218,10 +234,106 @@ class ScholarlyTests(unittest.IsolatedAsyncioTestCase):
         supplement=[r for r in result["candidates"] if r["role"]=="supplement"]
         self.assertEqual(len(supplement),1)
         self.assertEqual(supplement[0]["expected_md5"],"a"*32)
-        self.assertEqual(supplement[0]["version"],"author_manuscript")
+        self.assertEqual(supplement[0]["version"],"accepted_manuscript")
+        self.assertTrue(supplement[0]["is_manuscript"])
         self.assertTrue(any(r["role"]=="media" and "figure.jpg" in r["url"] for r in result["candidates"]))
         self.assertTrue(all("PMC123.1/" not in url for url in requests))
         self.assertTrue(all(not url.endswith('.pdf') for url in requests))
+
+    async def _pmc_jats_fixture(self, document, *, is_manuscript=False, inspect_jats=True):
+        requests = []
+        prefix = "PMC10752262.1"
+        def handle(request):
+            requests.append(str(request.url))
+            if request.url.path.endswith(".json"):
+                return httpx.Response(200, json={"pmcid": "PMC10752262", "version": 1,
+                    "doi": "10.1161/CIRCULATIONAHA.123.066680", "is_manuscript": is_manuscript,
+                    "xml_url": f"s3://pmc-oa-opendata/{prefix}/{prefix}.xml",
+                    "pdf_url": f"s3://pmc-oa-opendata/{prefix}/{prefix}.pdf",
+                    "media_urls": [f"s3://pmc-oa-opendata/{prefix}/" + filename
+                        for filename in ("cir-149-36-s001.pdf", "ordinary.png", "untyped.pdf", "label_only.pdf")]})
+            if request.url.path.endswith(".xml"):
+                return xml(document)
+            self.fail("PMC discovery must not request PDF or supplement bytes")
+        result = await resolve("pmc", prefix, config={"transport": httpx.MockTransport(handle), "inspect_jats": inspect_jats})
+        self.assertEqual(len(requests), 2 if inspect_jats else 1)
+        return result
+
+    async def test_pmc_typed_supplement_section_and_explicit_vor_keep_distinct_versions(self):
+        # Reduced public Circulation JATS layout; fixture bytes, not a live access claim.
+        result = await self._pmc_jats_fixture('''<article xmlns:xlink="http://www.w3.org/1999/xlink">
+          <front><article-meta><article-version-alternatives>
+            <article-version article-version-type="pmc-version">1</article-version>
+            <article-version vocab="JAV" article-version-type="Version of Record">3</article-version>
+          </article-version-alternatives><related-article related-article-type="correction-forward" xlink:href="PMC12345800">
+            <article-title>Correction to the trial</article-title>
+            <pub-id pub-id-type="doi">10.1161/CIR.0000000000001280</pub-id>
+          </related-article></article-meta></front><body>
+            <sec sec-type="supplementary-material"><title>Supplementary Material</title>
+              <fig id="s001"><media xlink:href="cir-149-36-s001.pdf"/></fig></sec>
+            <fig id="s002"><graphic xlink:href="ordinary.png"/></fig>
+            <sec sec-type="results"><media xlink:href="untyped.pdf"/></sec>
+            <sec><title>Supplementary Material</title><fig id="s003"><media xlink:href="label_only.pdf"/></fig></sec>
+          </body></article>''')
+        supplements = [row for row in result["candidates"] if row["role"] == "supplement"]
+        self.assertEqual(len(supplements), 1)
+        self.assertTrue(supplements[0]["url"].endswith("/cir-149-36-s001.pdf"))
+        self.assertEqual(supplements[0]["relationship_evidence"], {
+            "tag": "sec", "sec_type": "supplementary-material", "id": None, "href": "cir-149-36-s001.pdf"})
+        other = [row for row in result["candidates"] if row["role"] == "media"]
+        self.assertEqual({row["url"].rsplit("/", 1)[-1] for row in other}, {"ordinary.png", "untyped.pdf", "label_only.pdf"})
+        self.assertTrue(all(row["classification"] == "media_unknown" for row in other))
+        main = next(row for row in result["candidates"] if row["role"] == "main_pdf")
+        self.assertEqual(main["version"], "published_version")
+        self.assertEqual(main["version_raw"], "Version of Record")
+        self.assertEqual(main["article_version"], 1)
+        self.assertEqual(main["pmc_dataset_version"], 1)
+        self.assertEqual([(v["type"], v["value"]) for v in main["jats_article_versions"]], [("pmc-version", "1"), ("Version of Record", "3")])
+        self.assertEqual(main["version_evidence"], "jats.article-version@article-version-type")
+        self.assertTrue(main["version_evidence_url"].endswith("PMC10752262.1.xml"))
+        self.assertEqual(main["correction_incorporation"], "unknown")
+        self.assertEqual(main["correction_links"][0]["doi"], "10.1161/cir.0000000000001280")
+        self.assertEqual(main["correction_links"][0]["href"], "PMC12345800")
+        self.assertEqual(result["observations"][0]["supplement_status"], "references_found")
+        self.assertEqual(supplements[0]["version"], "published_version")
+        self.assertTrue(all(not row["downloaded"] for row in result["candidates"]))
+
+    async def test_pmc_numeric_or_untyped_version_does_not_establish_publication_state(self):
+        for declaration in (
+            '<article-version article-version-type="pmc-version">1</article-version>',
+            '<article-version>3</article-version>',
+            '<article-version article-version-type="pmc-version">Version of Record</article-version>',
+            '<article-version article-version-type="3">Version of Record</article-version>',
+        ):
+            with self.subTest(declaration=declaration):
+                result = await self._pmc_jats_fixture('<article><front><article-meta>' + declaration + '</article-meta></front></article>')
+                self.assertTrue(all(row["version"] == "unknown" for row in result["candidates"]))
+                self.assertTrue(all(row["pmc_dataset_version"] == 1 for row in result["candidates"]))
+                self.assertFalse(any(row["role"] == "supplement" for row in result["candidates"]))
+
+    async def test_pmc_conflicting_manuscript_flag_and_vor_remains_unknown(self):
+        result = await self._pmc_jats_fixture('<article><front><article-meta>'
+            '<article-version article-version-type="Version of Record">3</article-version>'
+            '</article-meta></front></article>', is_manuscript=True)
+        self.assertTrue(all(row["version"] == "unknown" and row["version_conflict"] for row in result["candidates"]))
+        self.assertEqual(result["status"], "partial")
+        self.assertIn("publication_version_conflict", [issue["code"] for issue in result["issues"]])
+
+    async def test_pmc_conflicting_explicit_jats_labels_remains_unknown(self):
+        result = await self._pmc_jats_fixture('<article><front><article-meta><article-version-alternatives>'
+            '<article-version article-version-type="Version of Record">3</article-version>'
+            '<article-version article-version-type="accepted manuscript">2</article-version>'
+            '</article-version-alternatives></article-meta></front></article>')
+        self.assertTrue(all(row["version"] == "unknown" for row in result["candidates"]))
+        self.assertEqual(result["status"], "partial")
+        self.assertIn("publication_version_conflict", [issue["code"] for issue in result["issues"]])
+
+    async def test_pmc_jats_version_not_inspected_when_disabled(self):
+        result = await self._pmc_jats_fixture('<article><front><article-meta>'
+            '<article-version article-version-type="Version of Record">3</article-version>'
+            '</article-meta></front></article>', inspect_jats=False)
+        self.assertTrue(all(row["version"] == "unknown" for row in result["candidates"]))
+        self.assertEqual(result["observations"][0]["supplement_status"], "uninspected")
 
     async def test_pmc_pdf_missing_is_partial_and_untrusted_object_rejected(self):
         def handle(request):
@@ -260,7 +372,9 @@ class ScholarlyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ScholarlyError) as cm:
             await search("google_scholar","trial")
         self.assertEqual(cm.exception.code,"operation_unsupported")
-        self.assertEqual(len(list_runes()),7)
+        self.assertEqual(len(list_runes()),9)
+        for rune in list_runes():
+            self.assertEqual(load_rune(rune['id'])['protocol_id'], rune['id'])
         rune=load_rune("jama-cardiology")
         self.assertEqual(rune["context"]["first_issue_date"],"2016-04-01")
         self.assertTrue(rune["digest"].startswith("sha256:"))
@@ -275,6 +389,28 @@ class ScholarlyTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ScholarlyError) as cm:
                     await search("kci","*",config={"transport":httpx.MockTransport(lambda req:response)})
                 self.assertEqual(cm.exception.code,code)
+
+
+class ScopusQueryModes(unittest.IsolatedAsyncioTestCase):
+    async def test_native_syntax_never_becomes_a_false_empty_phrase_search(self):
+        def forbidden(request):
+            raise AssertionError('Ambiguous Scopus syntax must be rejected before network access')
+        config = secrets(transport=httpx.MockTransport(forbidden))
+        with self.assertRaises(ScholarlyError) as caught:
+            await search('scopus', 'TITLE-ABS-KEY({cardiac death}) AND DOCTYPE(ar)', config=config)
+        self.assertEqual(caught.exception.code, 'query_mode_required')
+
+    async def test_explicit_native_syntax_preserves_date_and_journal_filters(self):
+        queries = []
+        def handle(request):
+            queries.append(request.url.params['query'])
+            return httpx.Response(200, json={'search-results': {'opensearch:totalResults': '0', 'entry': []}})
+        query = 'TITLE-ABS-KEY({cardiac death}) AND DOCTYPE(ar)'
+        config = secrets(query_mode='native', transport=httpx.MockTransport(handle))
+        await search('scopus', query, year_from=2024, year_to=2024, journals=['0735-1097'], config=config)
+        self.assertIn(query, queries[0])
+        self.assertIn('PUBYEAR > 2023', queries[0]); self.assertIn('PUBYEAR < 2025', queries[0])
+        self.assertIn('ISSN("0735-1097")', queries[0])
 
 
 if __name__ == "__main__":
