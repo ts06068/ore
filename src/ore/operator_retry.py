@@ -208,6 +208,7 @@ async def retry_verification(engine, broker, row, body):
                 raise ControlConflict('Retry action ownership changed')
             authorized = authorize_retry(engine.store, row, key=body['idempotency_key'])
             session.challenge_id, session.challenge_origin, session.challenge_url = challenge['id'], origin, checkpoint
+            session.challenge_episode = authorized['episode']
         if challenge_policy._expired(authorized, challenge_policy._now()):
             raise ControlConflict('The authorized retry expired; it cannot be renewed')
         # Returning control under this explicit new grant is not a success claim.

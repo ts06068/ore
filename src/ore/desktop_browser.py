@@ -421,6 +421,32 @@ def issue_checkpoint_observed(checkpoint, url, text):
             and bool(re.search(volume_label, folded)) and bool(re.search(issue_label, folded)))
 
 
+def ehj_archive_checkpoint_observed(checkpoint, url, title, text):
+    """Recognize a specific official archive view, never a sealed issue inventory."""
+    try:
+        expected, actual = urlsplit(checkpoint), urlsplit(url)
+        if (expected.scheme != 'https' or expected.hostname != 'academic.oup.com'
+                or expected.username or expected.password or expected.port not in (None, 443)
+                or (expected.scheme, expected.netloc, expected.path) != (actual.scheme, actual.netloc, actual.path)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    path = re.fullmatch(r'/eurheartj/issue-archive(?:/(\d{4}))?/?', expected.path)
+    if not path:
+        return False
+    heading, body = _fold(title), _fold(text)
+    if not all(re.search(pattern, heading) for pattern in
+               (r'\beuropean heart journal\b', r'\boxford academic\b')):
+        return False
+    if path[1]:
+        label = rf'\b{path[1]}\s+issues\b'
+        return bool(re.search(label, heading) and re.search(label, body)
+            and re.search(r'\bvol(?:ume)?\.?\s*\d+\s*[,;:]?\s+issue\s+\d+\b', body))
+    years = set(re.findall(r'\b(?:19[89]\d|20\d{2})\b', body))
+    return bool(re.search(r'\ball\s+issues\b', heading)
+        and re.search(r'\ball\s+issues\b', body) and len(years) >= 2)
+
+
 async def target_recovered(session):
     value = await observe(session)
     if value['page_state'] != 'content':
@@ -439,6 +465,22 @@ async def target_recovered(session):
         # the session previously used generic homepage or profile markers.
         matches = issue_checkpoint_observed(checkpoint, url, value['title'] + '\n' + value['text'])
         marker_count = 3  # observed brand, volume and issue at the exact checkpoint
+    elif (session.mission.get('desktop_context', {}).get('protocol_id') == 'journal.ehj'
+            and re.fullmatch(r'/eurheartj/issue-archive(?:/\d{4})?/?', urlsplit(session.challenge_url or url).path)):
+        # The cropped publisher logo is not reliable OCR. Only these exact
+        # packaged archive views may use the fully branded browser title,
+        # alongside archive-specific body evidence; arbitrary pages may not.
+        matches = ehj_archive_checkpoint_observed(session.challenge_url or url, url, value['title'], value['text'])
+        marker_count = 4  # journal, publisher, archive heading and archive entries
+        generated = (not session.policy.profile.get('desktop_success_text')
+            and session.mission.get('desktop_success_text_source') == 'journal_browser_context'
+            and markers == ['European Heart Journal', 'Oxford Academic'])
+        if not generated:
+            # Explicit operator/profile markers remain additional requirements.
+            if not isinstance(markers, list) or not markers or any(not isinstance(marker, str) or len(marker.strip()) < 8 for marker in markers):
+                return False, {'reason': 'native_target_evidence_not_configured'}
+            matches = matches and all(_fold(marker) in _fold(value['text']) for marker in markers)
+            marker_count += len(markers)
     else:
         if not isinstance(markers, list) or not markers or any(not isinstance(marker, str) or len(marker.strip()) < 8 for marker in markers):
             return False, {'reason': 'native_target_evidence_not_configured'}

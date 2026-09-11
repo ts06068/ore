@@ -157,6 +157,7 @@ class BrowserSession:
     challenge_origin: str | None = None
     challenge_url: str | None = None
     challenge_reservation: dict | None = None
+    challenge_episode: int | None = None
     request_denials: list = field(default_factory=list)
     request_timings: list = field(default_factory=list)
     network_failures: list = field(default_factory=list)
@@ -762,7 +763,9 @@ class BrowserManager:
     async def _track_challenge(self, session, result, owner='agent'):
         if owner != 'agent' or not self.store or session.mission.get('on_challenge', {}).get('policy_version') != 2:
             return result
-        if not result.get('challenge_detected'): return result
+        if not result.get('challenge_detected'):
+            await self._finalize_observed_challenge(session, result)
+            return result
         origin = f"{urlsplit(session.page.url).scheme}://{urlsplit(session.page.url).netloc}"
         # Start the elapsed clock before any extra DOM probing or screenshot.
         evidence = {'phase':'verification_visible',
@@ -773,11 +776,67 @@ class BrowserManager:
             session.profile_id + ':' + session.principal_id, evidence)
         if not episode: return result
         session.challenge_id, session.challenge_origin, session.challenge_url = episode['id'], origin, session.page.url
+        session.challenge_episode = episode.get('episode')
         result['challenge'] = {key:episode.get(key) for key in ('clock','state','attempts','max_attempts','elapsed_seconds','remaining_seconds','deadline_at','hard_deadline_at')}
         if episode.get('state') == 'awaiting_user':
             await self._takeover_locked(session)
             result.update(await self.summary(session))
         return result
+
+    async def _finalize_observed_challenge(self, session, result):
+        """A later content observation may settle a transient recovery check.
+
+        This does not reserve input, renew a clock, or resolve another browser's
+        newer episode. The caller holds the browser lock and agent ownership.
+        """
+        if not session.challenge_id or session.challenge_episode is None or session.challenge_reservation:
+            return
+        episode = await asyncio.to_thread(self.store.get_challenge, session.challenge_id)
+        identity = session.profile_id + ':' + session.principal_id
+        def eligible(value):
+            return (value and value.get('clock') == 'elapsed' and value.get('state') == 'detected'
+                and value.get('episode') == session.challenge_episode and not value.get('token')
+                and value.get('origin') == session.challenge_origin and value.get('auth_context') == identity
+                and session.challenge_url and urlsplit(session.page.url).path == urlsplit(session.challenge_url).path
+                and f'{urlsplit(session.page.url).scheme}://{urlsplit(session.page.url).netloc}' == session.challenge_origin
+                and (not value.get('operator_retry') or value['operator_retry']['job_id'] == session.job_id)
+                and datetime.fromisoformat(value['deadline_at']) > datetime.now(timezone.utc))
+        if not eligible(episode):
+            return
+        remaining = (datetime.fromisoformat(episode['deadline_at']) - datetime.now(timezone.utc)).total_seconds()
+        from .desktop import DesktopError
+        try:
+            async with asyncio.timeout(min(remaining, 30 if getattr(session.context, 'desktop', False) else 5)):
+                recovered, evidence = await self._target_recovered(session)
+        except (PlaywrightError, TimeoutError, AccessDenied, DesktopError):
+            # A subsequent observation may retry verification within the same
+            # allocation; unreadable pages are never successful access evidence.
+            return
+        if not recovered:
+            result['challenge_recovery'] = {'resolved': False, 'evidence': evidence}
+            return
+        def finalize():
+            # Recheck after awaited OCR/DOM work in the same transaction as the
+            # write: another session may have started a new episode or attempt.
+            with self.store._tx() as conn:
+                current = self.store._doc(conn, 'challenge', episode['id'])
+                value = deepcopy(current['data']) if current else None
+                if not eligible(value):
+                    return None
+                value.update(state='resolved', evidence=evidence)
+                job = self.store._job(conn, current['job_id'])
+                self.store._put(conn, 'challenge', value['id'], value, job)
+                self.store._event(conn, job['id'], 'challenge.resolved', {'challenge_id': value['id'],
+                    'evidence': evidence, 'via': 'browser_content_observation', 'session_id': session.id})
+                return value
+        resolved = await asyncio.to_thread(finalize)
+        if resolved:
+            # Retain the challenge ID and checkpoint as historical provenance;
+            # the durable resolved state makes deadline enforcement inactive.
+            session.challenge_episode = None
+            result['challenge'] = {key: resolved.get(key) for key in
+                ('id', 'episode', 'clock', 'state', 'attempts', 'max_attempts', 'deadline_at', 'hard_deadline_at')}
+            result['challenge_recovery'] = {'resolved': True, 'evidence': evidence}
 
     async def _challenge_deadline_expired(self, session):
         if not self.store or not session.challenge_id: return False
@@ -819,6 +878,7 @@ class BrowserManager:
             reservation = await asyncio.to_thread(self.store.reserve_challenge, session.job_id, origin,
                 auth_context, int(config.get("max_attempts_per_episode", 3)), float(config.get("max_active_seconds", 120)))
             session.challenge_id, session.challenge_origin, session.challenge_url = reservation["id"], origin, session.page.url
+            session.challenge_episode = reservation.get("episode")
             if reservation["allowed"]:
                 session.challenge_reservation = reservation
             elif reservation.get("reason") == "budget_exhausted":

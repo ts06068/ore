@@ -135,3 +135,83 @@ async def test_issue_recovery_requires_volume_and_issue_even_with_homepage_marke
     runtime.value['text'] = 'European Heart Journal. Oxford Academic. Volume 45, Issue 22.'
     assert (await target_recovered(session))[0] is False
     assert session.mission['scope']['article_types'] == 'all'
+
+
+def archive_text(year=None):
+    # Realistic OCR: the banner is cropped and publisher words are separated;
+    # the independently observed Chrome title retains the full site identity.
+    if year:
+        return f'European Heart Jou\nOxford\nstitution\n{year} issues\nVolume 45, Issue 1, 1 January {year}\nVolume 45, Issue 21, 1 June {year}'
+    return 'European Heart Jou\nOxford\nstitution\nAll Issues\nSelect year\n2026\n2025\n2024\n2023\n2022\n2021\n2020\n2019'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('year', [None, 2024])
+async def test_exact_ehj_archive_uses_branded_title_and_specific_body_when_logo_ocr_is_cropped(year):
+    from ore.desktop_browser import target_recovered
+    from test_desktop_browser import fixture_session
+    url = EHJ + '/issue-archive' + (f'/{year}' if year else '')
+    copied, profile = native_scope_copy(collection(), {}, url)
+    runtime, session = await fixture_session(copied, profile)
+    session.challenge_origin, session.challenge_url = 'https://academic.oup.com', url
+    label = f'{year} issues' if year else 'All Issues'
+    runtime.value.update(url=url, title=f'{label} | European Heart Journal | Oxford Academic - Google Chrome', text=archive_text(year))
+    recovered, evidence = await target_recovered(session)
+    assert recovered and evidence['target_markers_observed'] == 4
+    assert evidence['capture_kind'] == 'desktop_screenshot_ocr' and evidence['http_status_observed'] is False
+    assert session.mission['scope']['article_types'] == 'all'
+    assert session.mission['publication_window'] == collection()['publication_window']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['wrong_year_body', 'wrong_year_title', 'wrong_path', 'wrong_journal_title',
+    'missing_publisher_title', 'title_only', 'no_issue_rows', 'challenge', 'error', 'no_pack_context', 'generic_article'])
+async def test_ehj_archive_does_not_accept_branded_title_without_exact_archive_evidence(case):
+    from ore.desktop_browser import target_recovered
+    from test_desktop_browser import fixture_session
+    url = EHJ + '/issue-archive/2024'
+    copied, profile = native_scope_copy(collection(), {}, url)
+    runtime, session = await fixture_session(copied, profile)
+    session.challenge_origin, session.challenge_url = 'https://academic.oup.com', url
+    runtime.value.update(url=url, title='2024 issues | European Heart Journal | Oxford Academic - Google Chrome', text=archive_text(2024))
+    if case == 'wrong_year_body': runtime.value['text'] = archive_text(2023)
+    elif case == 'wrong_year_title': runtime.value['title'] = '2023 issues | European Heart Journal | Oxford Academic'
+    elif case == 'wrong_path': runtime.value['url'] = EHJ + '/issue-archive/2023'
+    elif case == 'wrong_journal_title': runtime.value['title'] = '2024 issues | Europace | Oxford Academic'
+    elif case == 'missing_publisher_title': runtime.value['title'] = '2024 issues | European Heart Journal'
+    elif case == 'title_only': runtime.value['text'] = 'A branded navigation header alone supplies no evidence of the requested archive or any issue entries.'
+    elif case == 'no_issue_rows': runtime.value['text'] = '2024 issues. European Heart Jou. Oxford stitution. The archive entries have not loaded in this observation.'
+    elif case == 'challenge': runtime.value['text'] += '\nVerify you are human'
+    elif case == 'error': runtime.value['text'] += '\nERR_CONNECTION_RESET'
+    elif case == 'no_pack_context': session.mission.pop('desktop_context')
+    elif case == 'generic_article':
+        runtime.value['url'] = session.challenge_url = EHJ + '/article/45/21/1'
+    assert (await target_recovered(session))[0] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('configured_in', ['mission', 'profile'])
+async def test_ehj_archive_keeps_explicit_stricter_markers_as_additional_requirements(configured_in):
+    from ore.desktop_browser import target_recovered
+    from test_desktop_browser import fixture_session
+    url = EHJ + '/issue-archive/2024'
+    mission, profile = collection(), {}
+    (mission if configured_in == 'mission' else profile)['desktop_success_text'] = ['Institution access verified']
+    copied, access = native_scope_copy(mission, profile, url)
+    runtime, session = await fixture_session(copied, access)
+    session.challenge_origin, session.challenge_url = 'https://academic.oup.com', url
+    runtime.value.update(url=url, title='2024 issues | European Heart Journal | Oxford Academic', text=archive_text(2024))
+    assert (await target_recovered(session))[0] is False
+    runtime.value['text'] += '\nInstitution access verified'
+    assert (await target_recovered(session))[0] is True
+
+
+def test_all_issues_archive_requires_multiple_year_entries_and_the_exact_official_path():
+    from ore.desktop_browser import ehj_archive_checkpoint_observed
+    url = EHJ + '/issue-archive'
+    title = 'All Issues | European Heart Journal | Oxford Academic'
+    assert not ehj_archive_checkpoint_observed(url, url, title, 'All Issues 2024')
+    assert not ehj_archive_checkpoint_observed(url, url, title, '2024 2023')
+    assert not ehj_archive_checkpoint_observed(url, url + '/2024', title, archive_text())
+    assert not ehj_archive_checkpoint_observed('https://academic.oup.com.evil.test/eurheartj/issue-archive',
+        'https://academic.oup.com.evil.test/eurheartj/issue-archive', title, archive_text())

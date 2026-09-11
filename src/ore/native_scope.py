@@ -47,6 +47,7 @@ def native_target_checkpoint(mission, profile, url):
         markers = journal_browser_context(url).get("success_text")
         if markers:
             mission["desktop_success_text"] = markers
+            mission["desktop_success_text_source"] = "journal_browser_context"
 
 
 def native_scope_copy(mission, profile, url=None):

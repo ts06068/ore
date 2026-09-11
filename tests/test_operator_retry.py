@@ -79,8 +79,8 @@ def test_operator_retry_requires_expiry_and_no_inflight_reservation(setup, clock
 
 
 @pytest.mark.browser
-@pytest.mark.parametrize('lost_native', [False, True])
-async def test_operator_retry_resumes_same_native_node_without_claiming_access_success(client, engine, site, browser_dependencies, monkeypatch, clock, lost_native):
+@pytest.mark.parametrize('lost_native,passive_recovery', [(False, False), (True, False), (True, True)])
+async def test_operator_retry_resumes_same_native_node_without_claiming_access_success(client, engine, site, browser_dependencies, monkeypatch, clock, lost_native, passive_recovery):
     await login(client)
     monkeypatch.setattr('ore.workflow_native.AgentSession', ScriptedSession)
     engine.backend = SimpleNamespace(sessions=[], prompts=[], rounds={}, results=[], usage_totals={}, timeouts=[], close=AsyncMock())
@@ -121,11 +121,19 @@ async def test_operator_retry_resumes_same_native_node_without_claiming_access_s
                 assert [item['id'] for item in state['browsers']] == [seen['sid']]
             delta = engine.workflows.nodes(run['id'])[0]['continuation_delta']
             assert delta['session_id'] == seen['sid'] and delta['reason'] == 'operator_retry_authorized'
-            reserved = await session.call('challenge', {'session_id': seen['sid']})
-            assert reserved['allowed']
             browser = engine.browser.get(seen['sid'])
-            observed = await session.call('browser_action', {'session_id': browser.id, 'epoch': browser.epoch,
-                'action': 'click', **({'x': 200, 'y': 250} if lost_native else {'selector': '#solve'})})
+            if passive_recovery:
+                # Native verification completes asynchronously after the operator
+                # grant but before the first ordinary agent observation.
+                runtime.value.update(title='Independent target',
+                    text='Independent target article now visible with substantive study results.')
+                observed = await session.call('browser_observe', {'session_id': browser.id})
+                assert observed['challenge_recovery']['resolved']
+            else:
+                reserved = await session.call('challenge', {'session_id': seen['sid']})
+                assert reserved['allowed']
+                observed = await session.call('browser_action', {'session_id': browser.id, 'epoch': browser.epoch,
+                    'action': 'click', **({'x': 200, 'y': 250} if lost_native else {'selector': '#solve'})})
             assert not observed['challenge_detected']
             await session.call('workflow.finish', {'output': {'done': True}})
     engine.backend.script = script
@@ -158,7 +166,7 @@ async def test_operator_retry_resumes_same_native_node_without_claiming_access_s
     assert (await drain(engine, run))['status'] == 'completed'
     assert len({session.session_id for session in engine.backend.sessions}) == 1
     final = engine.store.get_challenge(browser.challenge_id)
-    assert final['state'] == 'resolved' and final['attempts'] == 1
+    assert final['state'] == 'resolved' and final['attempts'] == (0 if passive_recovery else 1)
     assert engine.store.get_document('challenge.episode', [old['id'], old['episode']])['snapshot'] == old
     assert engine.handoffs.list(run['job_id'], 'active') == []
 

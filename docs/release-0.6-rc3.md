@@ -10,6 +10,8 @@ Automatic collection authority now includes ordinary `browser_action` input. Pre
 
 An expired shared challenge can be retried only through the authenticated operator request action. The prior episode is archived; one attempt and 120 seconds are allocated to that execution job, with adaptation disabled. If its native desktop was lost, ORE restores the original authorized checkpoint before starting the new clock. The agent has no tool for renewing this allocation, and a browser restart alone never resets it.
 
+A later normal-content observation now finalizes a still-current challenge after an asynchronous page transition. Resolution requires the same origin, path, episode and configured target evidence, within the existing deadline and without an active reservation. The EHJ archive has a specific check for its exact official path, journal/publisher title, archive year and visible issue rows; cropped logo OCR cannot keep a verified archive pending. Explicit profile markers and individual-issue checks remain enforced.
+
 New native desktops receive a configurable 4 GiB memory budget. Chrome's optional local model component is disabled. Expected negative DNS probes no longer break diagnostic logging. Access verification requires the actual target page; known issue checkpoints also require the observed journal, volume and issue.
 
 ## Measured EHJ check
@@ -17,5 +19,7 @@ New native desktops receive a configurable 4 GiB memory budget. Chrome's optiona
 On 2026-09-11, a real Astra/high agent opened `https://academic.oup.com/eurheartj` in isolated ordinary Chrome. One reserved checkbox click was followed by the exact target URL, European Heart Journal and Oxford Academic page content, and a resolved challenge episode. The check took 53 seconds. It used no publisher credentials or production challenge resets. The preceding 2 GiB run stopped after 8.5 seconds at its observed memory threshold.
 
 Evidence: `.ore/ehj-recovery/native/20260911T073915Z-72001a/reports/desktop-diagnosis.json`. This is page-access evidence, not proof that every June 2024 PDF and supplement has been collected. The tested host uses the explicitly configured single-session watchdog mode; its five-minute diagnostic lifetime remains bounded. Other networks and publisher decisions may differ.
+
+The installed release check also verifies that the scholarly module supplies the EHJ context. A replacement environment briefly omitted this optional module during validation; it was restored before the final replay.
 
 Package versions are `ore-engine 0.6.0rc3`, console/SDK `0.6.0-rc.3`; the scholarly package remains `0.2.0rc3`. Public package registries have not been updated.
