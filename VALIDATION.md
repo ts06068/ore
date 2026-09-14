@@ -1,18 +1,20 @@
-# ORE 0.6.0rc3: EHJ recovery — 2026-09-11
+# ORE 0.6.0rc3: EHJ recovery
 
-[Release behavior](docs/release-0.6-rc3.md). A real Astra/high agent reached the EHJ homepage in ordinary Chrome in 53 seconds, with one reserved checkbox click and a resolved episode. Exact URL, screenshot hash and journal/publisher branding were observed. The earlier 2 GiB run stopped at its memory threshold after 8.5 seconds; the successful run used the new 4 GiB budget. No article PDF or supplement was downloaded by this access diagnostic.
+The final September 11 execution reached the official EHJ 2024 archive, observed four June issue rows (volume 45, issues 21–24), and opened issue 21 and an article page in ordinary Chrome. This session had no visible challenge and required no new challenge attempt. The collection failed its completeness checks: only three article records and derived reports were saved; **no main PDFs or supplements were downloaded**.
 
-- Full initial Python regression: **979 passed** in 309.43 seconds; one dependency deprecation warning. Final issue-checkpoint and scope audit: **90 passed**.
-- Web: **140 tests passed**, production build passed; SDK: **16 tests passed**; wheel/sdist/core-only/Claude-extra/npm clean installation passed.
-- Installed rc3 wheel before the authority correction: **78 Python modules match the source checkout**. Four candidate API routes passed.
-- Running service: **0.6.0rc3** on port 8765, all **54 existing jobs** and prior chat/plan records preserved. The original EHJ request was repaired in its same approved envelope, retaining seven operation receipts, the old native session, eight challenge records, both existing messages and consumed budget. A transparent assistant maintenance message was added.
-- Collection browser-input authority: **26 tests passed**, including a host-created envelope, reserved browser click through `recipe.execute`, explicit permission narrowing and separate account authority. The legacy mock authority fixture was also corrected and passed.
-- Late target recovery and strict EHJ archive OCR: **131 checks passed**; rebind/transport/desktop API/handoff suite: **59 passed**. Independent review and its **71-check subset passed**. These sets overlap and are not summed into a unique test count.
-- Installed chat browser check: history separated from current requests, old planning request has no collection-resume control, no page errors.
+The preceding recovery run passed the visible challenge with one reserved click but exposed two host defects: delayed target recovery was not finalized, and cropped logo OCR prevented success recognition. Both are covered by the final runtime's exact archive checks and automatic finalization. A replacement environment that omitted `ore-scholarly` was corrected; clean-install checks now require the packaged EHJ context.
 
-Evidence: `.ore/releases/0.6.0rc3/`, `.ore/ehj-recovery/ui-installed.json`, `.ore/ehj-recovery/native/20260911T073915Z-72001a/reports/desktop-diagnosis.json`. The original collection then selected native Chrome correctly but inherited the expired planning-stage challenge deadline. The separate operator retry path addresses that stale allocation without granting the agent an automatic reset. Live archive runs then revealed omitted browser-input authority, a replacement environment missing the scholarly module, and delayed recovery with clipped logo OCR. The runtime and installed-package checks now cover these failures. Actual normal archive observations are retained separately from collection completeness evidence.
+- Final recovery/archive subset: **131 passed**; browser continuity/transport/API/handoff subset: **59 passed**. Independent review and its **71-check subset passed**. These subsets overlap.
+- [Final runtime CI](https://github.com/ts06068/ore/actions/runs/34583287827): **passed** for `e50e426`.
+- Core-only, scholarly, Claude-extra, wheel/sdist and npm installation checks passed. The installed core's **78 Python modules match source**; installed versions are `ore-engine 0.6.0rc3` and `ore-scholarly 0.2.0rc3`.
+- The upgrade preserved all **55 jobs**, original plans, prior messages, failed operation receipts and consumed budgets. Package registries have not been updated.
+- Completed-browser lifecycle regression: **29 checks passed** across completed-owner, handoff and retry-receipt tests. Source approvals, unfinished steps and operator actions remain actionable.
+- September 14 service recovery: the original chat has **zero active collection access requests**, preserves its `needs_replan` collection status, and renders without page errors. A late browser-expiry notification from an already completed node was retired.
+- The earlier installed UI check confirmed that planning-browser history cannot resume collection work and produced no browser page errors.
 
-These checks establish the tested recovery behavior. Complete June 2024 issue enumeration and all main/supplementary downloads remain separate acceptance requirements.
+Evidence: `.ore/ehj-recovery/final-live/`, `.ore/releases/0.6.0rc3/final-source-match.json`, and the current job's coverage report (SHA-256 `b024988c538bc3302064e09a01b06665595575fe42bd9baca6ec0dfe2f03d4cf`). The four issue rows are OCR evidence, not a sealed official inventory. Complete June issue enumeration, original HTML capture, all-article classification and independently verified file retrieval remain unfulfilled acceptance requirements.
+
+The separate anonymous homepage diagnostic reached EHJ in 53 seconds with one reserved click and a resolved challenge. The host used the explicitly configured 4 GiB, single-desktop watchdog mode; this diagnostic does not establish unrestricted or universal publisher access.
 
 # Historical ORE 0.6.0rc2 validation — 2026-09-11
 

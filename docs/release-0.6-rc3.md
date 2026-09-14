@@ -22,4 +22,8 @@ Evidence: `.ore/ehj-recovery/native/20260911T073915Z-72001a/reports/desktop-diag
 
 The installed release check also verifies that the scholarly module supplies the EHJ context. A replacement environment briefly omitted this optional module during validation; it was restored before the final replay.
 
+A browser that belongs to an already completed workflow step no longer creates a new access request when it expires. Existing obsolete browser requests are retired during session-loss handling or startup; source approvals, in-flight operator actions and current unfinished steps remain actionable. The collection’s acceptance status is preserved.
+
+The final original-chat replay reached the 2024 archive, four June issue rows, issue 21 and an article without a visible challenge. It saved three article records and incomplete coverage reports. No PDFs or supplements were downloaded; missing original HTML capture and all-article inventory support remain explicit collection gaps.
+
 Package versions are `ore-engine 0.6.0rc3`, console/SDK `0.6.0-rc.3`; the scholarly package remains `0.2.0rc3`. Public package registries have not been updated.

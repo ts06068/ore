@@ -159,20 +159,49 @@ class HandoffService:
             row = {**row, 'automatic_retry': retry_metadata(self.store, row)}
         return redact({key: value for key, value in row.items() if key not in ('receipts', 'inflight')})
 
+    def _completed_browser_owner(self, job_id, task_id):
+        """A finished workflow step cannot need its old browser to continue."""
+        task = self.store.get_task(task_id) if task_id else None
+        if not task or task.get('job_id') != job_id or task.get('kind') != 'workflow':
+            return False
+        binding = task.get('input') or {}
+        if not binding.get('run_id') or not binding.get('node_id'):
+            return False
+        node = self.store.get_document('workflow.node', [binding['run_id'], binding['node_id']])
+        return bool(node and node.get('job_id') == job_id and node.get('task_id') == task_id
+                    and node.get('status') in ('succeeded', 'skipped'))
+
+    def _retire_completed_browser(self, row):
+        if (row.get('session_id') and not row.get('source') and not row.get('inflight')
+                and row.get('kind') in ('browser', 'challenge')
+                and self._completed_browser_owner(row['job_id'], row.get('task_id'))):
+            self.update(row['id'], {'status': 'cancelled', 'resolution': 'browser_owner_completed',
+                'reason': 'This browser belonged to a completed workflow step. Its closure does not require access verification.'})
+            return True
+        return False
+
     def recover_interrupted_actions(self):
         for row in self.list(status='active'):
+            if self._retire_completed_browser(row):
+                continue
             if row.get('inflight'):
                 self.update(row['id'],{'inflight':None,'status':'needs_user','reason':'The server restarted during an operator action. Inspect the current browser and verify access before resuming.'})
 
     def record_event(self, job_id, kind, payload):
         payload = payload or {}
         if kind == 'browser_handoff':
+            if self._completed_browser_owner(job_id, payload.get('task_id')):
+                self.store.append_event(job_id, 'handoff.completed_browser_ignored', {
+                    'session_id': payload.get('session_id'), 'task_id': payload.get('task_id')})
+                return None
             return self.create(job_id, 'challenge' if payload.get('challenge_id') else 'browser',
                                payload.get('reason', 'Your input is required in the browser.'),
                                session_id=payload.get('session_id'), task_id=payload.get('task_id'), context=payload)
         if kind in ('browser_session_lost', 'executor.session_lost'):
             for row in self.list(job_id, 'active'):
                 if row.get('session_id') == payload.get('session_id'):
+                    if self._retire_completed_browser(row):
+                        continue
                     self.update(row['id'], {'session_state': 'lost', 'status': 'needs_user',
                                            'reason': 'The browser session ended. Restore the session and verify access before resuming.'})
         if kind == 'tool_completed' and payload.get('tool') == 'handoff':
