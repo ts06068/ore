@@ -169,10 +169,8 @@ def detect_media_type(path: str | Path, filename: str | None = None) -> str:
     with path.open("rb") as stream:
         head = stream.read(4096)
     lower = head.lstrip().lower()
-    if b"%PDF-" in head[:1024]:
-        return "application/pdf"
-    if lower.startswith((b"<!doctype html", b"<html", b"<head", b"<body")):
-        return "text/html"
+    # A stored ZIP member can expose its PDF header in these first bytes.
+    # Prefer the outer container's leading signature over embedded content.
     if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
         try:
             with zipfile.ZipFile(path) as archive:
@@ -186,6 +184,10 @@ def detect_media_type(path: str | Path, filename: str | None = None) -> str:
         except zipfile.BadZipFile:
             pass
         return "application/zip"
+    if b"%PDF-" in head[:1024]:
+        return "application/pdf"
+    if lower.startswith((b"<!doctype html", b"<html", b"<head", b"<body")):
+        return "text/html"
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if head.startswith(b"\xff\xd8\xff"):

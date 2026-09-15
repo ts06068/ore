@@ -6,7 +6,7 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 
-from ore.vault import UnsafeArchive, Vault, VaultError, ZipLimits, inspect_zip, safe_extract_zip
+from ore.vault import UnsafeArchive, Vault, VaultError, ZipLimits, detect_media_type, inspect_zip, safe_extract_zip
 
 
 def make_pdf(path, text="Study title 10.1234/example"):
@@ -301,3 +301,44 @@ def test_custom_member_limit_does_not_disable_other_archive_checks(tmp_path, fai
     reason = {'crc': 'CRC', 'path': 'escapes', 'ratio': 'ratio', 'count': 'count'}[failure]
     assert any(reason in issue for issue in result['issues'])
     assert 'members' not in result
+
+
+def test_stored_zip_with_pdf_first_member_is_verified_as_outer_archive(tmp_path):
+    pdf = make_pdf(tmp_path / 'main.pdf')
+    bundle = tmp_path / 'downloads.zip'
+    with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_STORED) as output:
+        output.write(pdf, 'article/main.pdf')
+        output.writestr('manifest.csv', 'doi,file\n10.1234/example,article/main.pdf\n')
+    before = bundle.read_bytes()
+    assert before.startswith(b'PK\x03\x04') and b'%PDF-' in before[:1024]
+    assert detect_media_type(bundle) == 'application/zip'
+    result = Vault(tmp_path / 'vault').commit_file(bundle, {'role': 'collection_bundle', 'filename': bundle.name})
+    assert result['status'] == 'verified' and result['media_type'] == 'application/zip'
+    assert result['sha256'] == hashlib.sha256(before).hexdigest()
+    assert {member['name'] for member in result['members']} == {'article/main.pdf', 'manifest.csv'}
+    assert next(member for member in result['members'] if member['name'] == 'article/main.pdf')['sha256'] == hashlib.sha256(pdf.read_bytes()).hexdigest()
+    assert bundle.read_bytes() == before
+
+
+@pytest.mark.parametrize('prefix', [b'', b'\n ', b'allowed PDF prefix\n'])
+def test_pdf_detection_keeps_nonarchive_prefix_support(tmp_path, prefix):
+    pdf = make_pdf(tmp_path / 'main.pdf')
+    pdf.write_bytes(prefix + pdf.read_bytes())
+    assert detect_media_type(pdf) == 'application/pdf'
+
+
+def test_pdf_with_appended_zip_keeps_its_leading_pdf_format(tmp_path):
+    pdf = make_pdf(tmp_path / 'main.pdf')
+    with zipfile.ZipFile(pdf, 'a', zipfile.ZIP_STORED) as archive:
+        archive.writestr('metadata.txt', 'embedded appendix')
+    assert pdf.read_bytes().startswith(b'%PDF-') and zipfile.is_zipfile(pdf)
+    assert detect_media_type(pdf) == 'application/pdf'
+
+
+def test_invalid_zip_signature_with_embedded_pdf_is_not_verified(tmp_path):
+    source = tmp_path / 'invalid.zip'
+    source.write_bytes(b'PK\x03\x04' + b'%PDF-1.4\nInvalid container')
+    assert detect_media_type(source) == 'application/zip'
+    result = Vault(tmp_path / 'vault').commit_file(source, {'role': 'collection_bundle'})
+    assert result['status'] == 'invalid'
+    assert any(issue.startswith('unsafe_or_invalid_zip:') for issue in result['issues'])
