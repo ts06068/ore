@@ -12,6 +12,7 @@ from ore_scholarly.packs import load_rune
 EHJ = 'https://academic.oup.com/eurheartj'
 ISSUE = EHJ + '/issue/45/21'
 FRAME = 'https://challenges.cloudflare.com'
+ASSETS = ['https://oup.silverchair-cdn.com', 'https://watermark02.silverchair.com']
 
 
 @pytest.fixture
@@ -30,26 +31,32 @@ def collection():
             'completeness': 'systematic', 'publication_window': {'from': '2024-06-01', 'until_exclusive': '2024-07-01'},
             'scope': {'journal_id': 'ehj', 'article_types': 'all', 'exclude_related_journals': True},
             'on_challenge': {'max_attempts_per_episode': 3, 'max_elapsed_seconds': 120},
+            'budget': {'max_turns': 100, 'max_seconds': 3600, 'max_bytes': 1_000_000_000},
+            'budget_scope_id': 'shared-collection-budget',
             'source_policy': {'allow': {'browser': ['*'], 'download': ['*']}}}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('url', [EHJ, EHJ + '/', ISSUE])
-async def test_exact_ehj_checkpoint_adds_packaged_frame_scope_only_to_session_copy(public_dns, url):
+@pytest.mark.parametrize('url', [EHJ, EHJ + '/', ISSUE, EHJ + '/article-pdf/45/21/1904/58037092/ehae147.pdf'])
+async def test_exact_ehj_checkpoint_adds_packaged_frame_and_assets_only_to_session_copy(public_dns, url):
     mission = collection();profile = {'id': 'institution', 'principal_id': 'researcher'}
     original_mission, original_profile = deepcopy(mission), deepcopy(profile)
     copied, access = await native_browser_scope(mission, profile, url)
-    assert copied['allowed_origins'] == ['https://academic.oup.com', FRAME]
+    assert copied['allowed_origins'] == ['https://academic.oup.com', FRAME, *ASSETS]
+    assert journal_browser_context(url)['asset_origins'] == ASSETS
+    assert load_rune('ehj')['protocol_version'] == '0.2.1'
     assert 'brunhild.challenges.cloudflare.com' not in copied['allowed_origins']
     context = copied['desktop_context'];pack = load_rune('ehj')
     assert context == {'protocol_id': pack['protocol_id'], 'digest': pack['digest'], 'scope': 'browser_session_only'}
-    for key in ('scope', 'artifact_roles', 'completeness', 'publication_window', 'source_policy', 'on_challenge'):
+    for key in ('scope', 'artifact_roles', 'completeness', 'publication_window', 'source_policy',
+                'on_challenge', 'budget', 'budget_scope_id'):
         assert copied[key] == original_mission[key]
     assert copied['scope']['article_types'] == 'all'
     assert access['id'] == profile['id'] and access['principal_id'] == profile['principal_id']
     assert access['require_desktop'] is True and access['browser_backend'] == 'desktop_chrome'
     assert mission == original_mission and profile == original_profile
-    assert set(public_dns) == {'academic.oup.com', 'challenges.cloudflare.com'}
+    assert set(public_dns) == {'academic.oup.com', 'challenges.cloudflare.com',
+                               'oup.silverchair-cdn.com', 'watermark02.silverchair.com'}
     if '/issue/' in url:
         assert copied['desktop_issue_checkpoint'] == ISSUE
         assert 'desktop_success_text' not in copied
@@ -105,7 +112,7 @@ def test_operator_attachment_uses_same_ehj_context_without_replacing_collection_
                'retrieval_policy': {'mode': 'api_open_access_first', 'browser_fallback': False}}
     before = deepcopy((mission, profile))
     copied, access, additions = _session_policy(mission, profile, ISSUE)
-    assert additions == [FRAME]
+    assert additions == [FRAME, *ASSETS]
     assert copied['desktop_issue_checkpoint'] == ISSUE
     assert copied['retrieval_policy']['browser_fallback'] is True
     assert access['retrieval_policy']['browser_fallback'] is True
@@ -215,3 +222,34 @@ def test_all_issues_archive_requires_multiple_year_entries_and_the_exact_officia
     assert not ehj_archive_checkpoint_observed(url, url + '/2024', title, archive_text())
     assert not ehj_archive_checkpoint_observed('https://academic.oup.com.evil.test/eurheartj/issue-archive',
         'https://academic.oup.com.evil.test/eurheartj/issue-archive', title, archive_text())
+
+
+@pytest.mark.asyncio
+async def test_ehj_asset_download_admission_is_finite_and_session_only(public_dns):
+    from ore.policy import AccessPolicy
+    mission = collection();mission['allowed_origins'] = ['https://academic.oup.com']
+    before = deepcopy(mission)
+    copied, profile = await native_browser_scope(mission, {}, ISSUE)
+    original = AccessPolicy(mission, {}, operation='download')
+    native = AccessPolicy(copied, profile, operation='download')
+    for origin in ASSETS:
+        url = origin + '/ehae147.pdf'
+        assert await native.check(url) == url
+        with pytest.raises(AccessDenied, match='Origin outside the mission'):
+            await original.check(url)
+    for origin in ('https://watermark01.silverchair.com', 'https://other.silverchair-cdn.com',
+                   'https://watermark02.silverchair.com.evil.test', 'http://watermark02.silverchair.com',
+                   'https://watermark02.silverchair.com:8443'):
+        with pytest.raises(AccessDenied, match='Origin outside the mission'):
+            await native.check(origin + '/ehae147.pdf')
+    assert mission == before and 'asset_origins' not in copied['scope']
+
+
+@pytest.mark.asyncio
+async def test_ehj_asset_origins_do_not_override_restricted_access_profile(public_dns):
+    mission = collection()
+    profile = {'id': 'restricted', 'origins': ['https://academic.oup.com', FRAME, ASSETS[0]]}
+    before = deepcopy((mission, profile))
+    with pytest.raises(AccessDenied, match='Origin outside access profile'):
+        await native_browser_scope(mission, profile, ISSUE)
+    assert (mission, profile) == before

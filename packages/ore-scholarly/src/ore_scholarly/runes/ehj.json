@@ -1,6 +1,6 @@
 {
   "schema_version": "ore.rune/v0",
-  "protocol_version": "0.2.0",
+  "protocol_version": "0.2.1",
   "inputs": {
     "publication_window": {
       "basis": "issue_date",
@@ -36,7 +36,10 @@
     "origins": [
       "https://academic.oup.com"
     ],
-    "asset_origins": [],
+    "asset_origins": [
+      "https://oup.silverchair-cdn.com",
+      "https://watermark02.silverchair.com"
+    ],
     "article_versions": [
       "published_version"
     ],
@@ -174,7 +177,7 @@
       "unlisted_media": "media_unknown; do not relabel all images as supplements"
     },
     "completion_boundary": "Publisher TOC reconciliation plus individual artifact observations; empty browser section alone is not proof of absence.",
-    "asset_origin_policy": "Discover asset origins from observed links and authorize through the mission scope before retrieval; no blanket CDN wildcard."
+    "asset_origin_policy": "The packaged asset origins are exact observed publisher delivery hosts. Discover additional asset origins from observed links and authorize through the mission scope before retrieval; no blanket CDN wildcard."
   },
   "completeness": "systematic",
   "coverage_schema": "ore.coverage/v1",

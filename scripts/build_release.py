@@ -175,7 +175,7 @@ assert DesktopRuntime.__name__ == 'DesktopRuntime'
 assert ore_scholarly.list_sources()
 assert ore_scholarly.list_runes()
 # Scholarly browser contexts must survive wheel installation; a core-only runtime
-# cannot verify EHJ archive access or supply its packaged frame dependencies.
+# cannot verify EHJ archive access or supply its packaged frame/asset dependencies.
 from copy import deepcopy
 from ore.native_scope import journal_browser_context, native_scope_copy
 mission = {'goal': 'Download all EHJ June 2024 articles', 'allowed_origins': [],
@@ -190,9 +190,11 @@ for path in ('/eurheartj/issue-archive', '/eurheartj/issue-archive/2024'):
     assert context['protocol_id'] == 'journal.ehj' and context['digest']
     assert context['success_text'] == ['European Heart Journal', 'Oxford Academic']
     assert 'https://challenges.cloudflare.com' in context['support_origins']
+    assert context['asset_origins'] == ['https://oup.silverchair-cdn.com', 'https://watermark02.silverchair.com']
     copied, access = native_scope_copy(mission, profile, checkpoint)
     assert copied['desktop_success_text'] == context['success_text']
-    assert copied['allowed_origins'] == ['https://academic.oup.com', 'https://challenges.cloudflare.com']
+    assert copied['allowed_origins'] == ['https://academic.oup.com', 'https://challenges.cloudflare.com',
+                                         'https://oup.silverchair-cdn.com', 'https://watermark02.silverchair.com']
     for field in ('scope', 'publication_window', 'artifact_roles', 'completeness'):
         assert copied[field] == mission[field], 'Packaged browser context changed collection criteria'
     assert access['id'] == profile['id'] and access['principal_id'] == profile['principal_id']

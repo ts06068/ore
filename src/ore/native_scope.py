@@ -1,6 +1,6 @@
 """Bounded native-browser copies of an already authorized mission.
 
-Only packaged journal context supplies implicit browser dependencies. Collection
+Only packaged journal context supplies implicit browser and asset dependencies. Collection
 criteria, profile identity, source policy and challenge budgets remain unchanged.
 """
 from copy import deepcopy
@@ -33,6 +33,7 @@ def journal_browser_context(url):
             return {}
         return {"protocol_id": pack["protocol_id"], "digest": pack["digest"],
                 "support_origins": pack["scope"].get("browser_support_origins", []),
+                "asset_origins": pack["scope"].get("asset_origins", []),
                 "success_text": [pack["context"]["journal_title"], "Oxford Academic"]}
     return {}
 
@@ -63,7 +64,8 @@ def native_scope_copy(mission, profile, url=None):
     additions = []
     context = journal_browser_context(url)
     for values in (scope.get("asset_origins", []), scope.get("browser_support_origins", []),
-                   access.get("browser_support_origins", []), context.get("support_origins", [])):
+                   access.get("browser_support_origins", []), context.get("support_origins", []),
+                   context.get("asset_origins", [])):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
             raise AccessDenied("Desktop support origins must be an explicit finite list")
         additions.extend(values)
