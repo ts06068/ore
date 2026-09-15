@@ -8,6 +8,11 @@ export function date(value:unknown):string {if(typeof value!=='string')return 'â
 export function bytes(value:unknown):string {if(typeof value!=='number')return 'â€”';if(value<1024)return `${value} B`;const scale=Math.min(Math.floor(Math.log(value)/Math.log(1024)),4);return `${(value/1024**scale).toFixed(1)} ${['B','KB','MB','GB','TB'][scale]}`;}
 export function label(value:string):string {return value.replaceAll('_',' ').replace(/\b\w/g,word=>word.toUpperCase());}
 export function safeUrl(value:unknown):string|undefined {if(typeof value!=='string')return;try{const url=new URL(value);if(['https:','http:'].includes(url.protocol))return url.href;}catch{/* not an external URL */}}
+// Chat may link to verified files on the same ORE server, including remote deployments.
+export function safeMarkdownUrl(value:unknown):string|undefined {
+ if(typeof value==='string'&&/^\/v1\/jobs\/[A-Za-z0-9_-]+\/artifacts\/[A-Za-z0-9_-]+\/file$/.test(value))return value;
+ return safeUrl(value);
+}
 export function errorMessage(error:unknown):string {return error instanceof Error?error.message:String(error);}
 export function download(blob:Blob,filename:string){const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=filename;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 export function listText(value:unknown):string {return Array.isArray(value)?value.map(v=>typeof v==='string'?v:text(record(v).id)).join(', '):text(value);}
