@@ -57,6 +57,9 @@ def _value(node):
 
 
 def _classify(label, profile, title=""):
+    # Explicit reviewed all-type profiles include every extracted article row.
+    # Research-only labels/title heuristics must not silently narrow that scope.
+    if profile.get('article_types') == 'all':return 'included'
     if any(re.search(pattern,title,re.I) for pattern in profile.get('ambiguous_title_patterns',[])):return 'needs_review'
     key = (label or '').strip().casefold()
     if key in {x.casefold() for x in profile.get('include_labels', [])}:return 'included'
@@ -134,6 +137,14 @@ class CoverageLedger:
         if not profile or profile['kind'] not in kind:raise CoverageError('Trusted profile of the required kind is missing')
         return profile
 
+    def _check_article_type_scope(self, job_id, profile, classifications=()):
+        if (self._job(job_id)['mission'].get('scope') or {}).get('article_types') != 'all':
+            return
+        if profile.get('article_types') != 'all':
+            raise CoverageError("All-article scope requires a reviewed extraction profile with article_types='all'")
+        if any(value != 'included' for value in classifications):
+            raise CoverageError('All-article scope cannot exclude or leave unclassified extracted article rows')
+
     def capture_snapshot(self, job_id, *, url, content, media_type='text/html', authority=None, source_id=None, status_code=200, capture_kind='response_body', lease=None):
         if not isinstance(content, bytes) or len(content)>32*1024*1024:raise CoverageError('Snapshot must be complete executor-captured bytes up to 32 MiB')
         authority = authority or ('pmc' if source_id == 'pmc' else 'journal')
@@ -196,7 +207,8 @@ class CoverageLedger:
     def seal_issue(self, job_id, issue_id, snapshot_ids, profile_id, *, lease=None):
         issue_id=canonical_url(issue_id);target=self._get(job_id,'collection','target')
         if issue_id not in target['issue_ids']:raise CoverageError('Issue is outside the locked collection target')
-        profile=self._profile(profile_id,('html_issue',));captured=self._snapshots(job_id,snapshot_ids,profile)
+        profile=self._profile(profile_id,('html_issue',));self._check_article_type_scope(job_id,profile)
+        captured=self._snapshots(job_id,snapshot_ids,profile)
         if issue_id not in {s['url'] for s,_ in captured}:raise CoverageError('The target issue URL must be captured')
         entries={};next_urls=set();observed={s['url'] for s,_ in captured};reported=[]
         for snapshot,data in captured:
@@ -233,8 +245,12 @@ class CoverageLedger:
         return self._put(job_id,'issue',issue_id,value,lease)
 
     def seal_article(self, job_id, article_key, snapshot_ids, profile_id, *, lease=None):
-        profile=self._profile(profile_id,('html_article','jats_article'));captured=self._snapshots(job_id,snapshot_ids,profile)
-        issue_rows=[r for issue in self._current(job_id,'issue') for r in issue.get('entries',[]) if r['article_key']==article_key]
+        profile=self._profile(profile_id,('html_article','jats_article'));self._check_article_type_scope(job_id,profile)
+        captured=self._snapshots(job_id,snapshot_ids,profile)
+        issues=[issue for issue in self._current(job_id,'issue') if any(r['article_key']==article_key for r in issue.get('entries',[]))]
+        for issue in issues:
+            self._check_article_type_scope(job_id,issue.get('extractor_profile') or {},[r['classification'] for r in issue['entries']])
+        issue_rows=[r for issue in issues for r in issue['entries'] if r['article_key']==article_key]
         if not issue_rows:raise CoverageError('Article is absent from sealed issue inventory')
         matches=[(snap,data) for snap,data in captured if article_identity(snap['url'])==article_key or snap['url']==issue_rows[0]['url']]
         if not matches and not article_key.startswith('doi:'):raise CoverageError('Article snapshots do not match the TOC identity')
@@ -301,7 +317,7 @@ class CoverageLedger:
         if len(classifications|toc_classes)>1:raise CoverageError('Publisher article classifications disagree')
         classification=next(iter(classifications|toc_classes),'needs_review')
         if classification=='needs_review':raise CoverageError('Original-article type remains unverified')
-        if classification=='included' and any(re.search(pattern,title,re.I) for pattern in profile.get('ambiguous_title_patterns',[]) for title in titles):
+        if classification=='included' and profile.get('article_types')!='all' and any(re.search(pattern,title,re.I) for pattern in profile.get('ambiguous_title_patterns',[]) for title in titles):
             raise CoverageError('Review-like title requires an explicit reviewed eligibility rule; broad research label is insufficient')
         primary_main = None
         mains=[u for u,(role,_) in assets.items() if role=='main_pdf']
@@ -437,7 +453,9 @@ def audit_coverage(store, job_id, *, state_dir):
     counts['issues_expected']=len(target['issue_ids']);entries={};verified_issues=[];complete_keys=set()
     for issue_id in target['issue_ids']:
         try:
-            issue=ledger._get(job_id,'issue',issue_id);ledger._snapshots(job_id,issue['snapshot_ids']);counts['issues_verified']+=1;verified_issues.append(issue)
+            issue=ledger._get(job_id,'issue',issue_id);ledger._snapshots(job_id,issue['snapshot_ids'])
+            ledger._check_article_type_scope(job_id,issue.get('extractor_profile') or {},[entry['classification'] for entry in issue['entries']])
+            counts['issues_verified']+=1;verified_issues.append(issue)
             for entry in issue['entries']:
                 if entry['article_key'] in entries:gaps.append({'kind':'duplicate_issue_article','article_key':entry['article_key']})
                 entries[entry['article_key']]=entry
@@ -448,12 +466,13 @@ def audit_coverage(store, job_id, *, state_dir):
     for key,entry in entries.items():
         try:
             article=ledger._get(job_id,'article',key);ledger._snapshots(job_id,article['snapshot_ids'])
+            ledger._check_article_type_scope(job_id,article.get('extractor_profile') or {},[article['classification']])
         except (CoverageError,OSError) as exc:
             # Even exclusion must be supported by the independently parsed TOC.
             if entry['classification']=='excluded':counts['excluded']+=1;continue
             counts['classification_unresolved']+=1
             counts['supplement_inventory_unknown']+=int(entry['classification']=='included')
-            gaps.append({'kind':'article_manifest_missing','article_key':key});continue
+            gaps.append({'kind':'article_manifest_missing','article_key':key,'message':str(exc)});continue
         counts[article['classification']]+=1
         if article['classification']=='excluded':continue
         article_complete=True

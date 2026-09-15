@@ -333,3 +333,118 @@ def test_api_first_cannot_match_supplement_by_filename_or_change_bound_identity(
     wrong=value.store.upsert_resource(job,{'doi':'10.1234/different'})
     for arguments in ({'url':'https://pmc.ncbi.nlm.nih.gov/other.pdf'},{'role':'supplement'},{'resource_id':wrong['id']}):
         with pytest.raises(CoverageError):value.check_download(job,candidate['id'],candidate['requirement_id'],**arguments)
+
+
+def all_types_case(ledger):
+    value,_,root=ledger
+    job=value.store.create_job(Mission(goal='Collect every article type',completeness='systematic',
+                                      scope={'article_types':'all'}).model_dump(mode='json'))['id']
+    value.declare_collection(job,[ISSUE])
+    for kind in ('issue','article'):
+        original=value._profile('fixture.'+kind,('html_'+kind,))
+        profile={k:v for k,v in original.items() if k not in (
+            'id','profile_digest','reviewer','state_version','job_id','generation','revision','created_at','updated_at')}
+        value.register_profile({**profile,'id':'all.'+kind,'article_types':'all',
+                                'ambiguous_title_patterns':['systematic review']},reviewer='all-types-fixture')
+    return value,job,root
+
+
+def test_all_article_scope_rejects_research_only_issue_profile(ledger):
+    value,job,_=all_types_case(ledger)
+    with pytest.raises(CoverageError,match="article_types='all'"):
+        value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html(label='Editorial'))],'fixture.issue')
+    assert value._current(job,'issue')==[]
+
+
+def test_all_article_scope_rejects_research_only_article_profile(ledger):
+    value,job,_=all_types_case(ledger)
+    value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html())],'all.issue')
+    with pytest.raises(CoverageError,match="article_types='all'"):
+        value.seal_article(job,KEY,[snap(value,job,ARTICLE,article_html())],'fixture.article')
+    assert value._current(job,'article')==[]
+
+
+@pytest.mark.parametrize('label',['Original Article','Editorial','Review','CardioPulse','New Publisher Category',''])
+def test_reviewed_all_type_profiles_keep_every_article_and_require_its_files(ledger,label):
+    value,job,root=all_types_case(ledger)
+    toc=issue_html(label=label).replace('>One<','>A systematic review<')
+    issue=value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,toc)],'all.issue')
+    assert issue['entries'][0]['classification']=='included'
+    assert issue['entries'][0]['article_type_raw']==label
+    article=value.seal_article(job,KEY,[snap(value,job,ARTICLE,article_html(label=label))],'all.article')
+    assert article['classification']=='included'
+    assert article['article_types_raw']==([label] if label else [])
+    assert len(article['requirements'])==2
+    incomplete=audit_coverage(value.store,job,state_dir=root)
+    assert incomplete['status']=='incomplete' and incomplete['counts']['main_expected']==1
+    assert incomplete['counts']['supplements_expected']==1 and incomplete['counts']['excluded']==0
+    for candidate in article['candidates']:bind(value,job,root,candidate)
+    complete=audit_coverage(value.store,job,state_dir=root)
+    assert complete['status']=='complete_within_scope' and complete['inventory_verified'] is True
+    assert complete['coverage_denominator']==1 and complete['counts']['resources_complete']==1
+    assert complete['counts']['main_verified']==1 and complete['counts']['supplements_verified']==1
+
+
+@pytest.mark.parametrize('body,match',[
+    (article_html(label='Editorial').replace(f'<a class="main" href="{MAIN}">PDF</a>',''),'no declared main PDF'),
+    (article_html(label='Editorial').replace(' data-complete',''),'not demonstrably complete'),
+])
+def test_all_type_profiles_preserve_pdf_and_supplement_evidence_requirements(ledger,body,match):
+    value,job,_=all_types_case(ledger)
+    value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html(label='Editorial'))],'all.issue')
+    with pytest.raises(CoverageError,match=match):
+        value.seal_article(job,KEY,[snap(value,job,ARTICLE,body)],'all.article')
+
+
+def test_research_only_profile_preserves_editorial_exclusion(ledger):
+    value,job,root=ledger
+    issue=value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html(label='Editorial'))],'fixture.issue')
+    assert issue['entries'][0]['classification']=='excluded'
+    result=audit_coverage(value.store,job,state_dir=root)
+    assert result['status']=='complete_within_scope'
+    assert result['counts']['excluded']==1 and result['counts']['main_expected']==0
+
+
+def test_audit_rejects_legacy_all_article_job_sealed_with_research_only_issue(ledger,monkeypatch):
+    value,job,root=all_types_case(ledger)
+    # Reproduce the pre-fix ledger, which did not enforce mission article scope.
+    with monkeypatch.context() as old_runtime:
+        old_runtime.setattr(CoverageLedger,'_check_article_type_scope',lambda *args:None)
+        value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html(label='Editorial'))],'fixture.issue')
+    result=audit_coverage(value.store,job,state_dir=root)
+    assert result['status']=='incomplete' and result['inventory_verified'] is False
+    assert result['coverage_denominator'] is None and result['counts']['issues_complete']==0
+    assert result['gaps'][0]['kind']=='issue_manifest_unverified'
+    assert "article_types='all'" in result['gaps'][0]['message']
+    with pytest.raises(CoverageError,match="article_types='all'"):
+        value.seal_article(job,KEY,[snap(value,job,ARTICLE,article_html(label='Editorial'))],'all.article')
+
+
+def test_audit_rejects_legacy_research_article_profile_under_all_type_issue(ledger,monkeypatch):
+    value,job,root=all_types_case(ledger)
+    value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html())],'all.issue')
+    with monkeypatch.context() as old_runtime:
+        old_runtime.setattr(CoverageLedger,'_check_article_type_scope',lambda *args:None)
+        article=value.seal_article(job,KEY,[snap(value,job,ARTICLE,article_html())],'fixture.article')
+        for candidate in article['candidates']:bind(value,job,root,candidate)
+    result=audit_coverage(value.store,job,state_dir=root)
+    assert result['status']=='incomplete' and result['inventory_verified'] is False
+    assert result['counts']['resources_complete']==0 and result['counts']['artifacts_verified']==0
+    assert result['gaps'][0]['kind']=='article_manifest_missing'
+    assert "article_types='all'" in result['gaps'][0]['message']
+
+
+def test_audit_rejects_legacy_exclusions_even_with_all_type_profile_marker(ledger,monkeypatch):
+    import ore.coverage as coverage
+    value,job,root=all_types_case(ledger)
+    classify=coverage._classify
+    # An older extractor can carry an unrecognized profile field while still
+    # applying research-only exclusion labels. Its sealed counts are unsafe.
+    with monkeypatch.context() as old_runtime:
+        old_runtime.setattr(coverage,'_classify',lambda label,profile,title='':
+                            classify(label,{k:v for k,v in profile.items() if k!='article_types'},title))
+        value.seal_issue(job,ISSUE,[snap(value,job,ISSUE,issue_html(label='Editorial'))],'all.issue')
+    result=audit_coverage(value.store,job,state_dir=root)
+    assert result['status']=='incomplete' and result['inventory_verified'] is False
+    assert result['counts']['issues_complete']==0
+    assert 'cannot exclude' in result['gaps'][0]['message']
