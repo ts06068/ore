@@ -9,7 +9,7 @@ import shutil
 import stat
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -53,7 +53,7 @@ class UnsafeArchive(VaultError):
 @dataclass(frozen=True)
 class ZipLimits:
     max_members: int = 10_000
-    max_member_bytes: int = 256 * 1024 * 1024
+    max_member_bytes: int = 512 * 1024 * 1024
     max_total_bytes: int = 1024 * 1024 * 1024
     max_ratio: float = 1000
     max_depth: int = 20
@@ -100,8 +100,10 @@ def inspect_zip(path: str | Path, limits: ZipLimits | None = None) -> list[dict[
             if not member.is_dir():
                 files.add(name)
             total += member.file_size
-            if member.file_size > limits.max_member_bytes or total > limits.max_total_bytes:
-                raise UnsafeArchive("archive expanded size exceeds limit")
+            if member.file_size > limits.max_member_bytes:
+                raise UnsafeArchive(f"archive expanded member size exceeds limit ({member.file_size} > {limits.max_member_bytes})")
+            if total > limits.max_total_bytes:
+                raise UnsafeArchive(f"archive expanded total size exceeds limit ({total} > {limits.max_total_bytes})")
             if member.file_size and member.file_size / max(member.compress_size, 1) > limits.max_ratio:
                 raise UnsafeArchive("archive compression ratio exceeds limit")
         for name in seen:
@@ -253,7 +255,9 @@ def _pdf_identity(reader: PdfReader, expected: dict[str, Any]) -> tuple[str, dic
 
 
 class Vault:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, zip_limits: ZipLimits | None = None):
+        # Parsing limits are trusted runtime configuration, never file metadata.
+        self.zip_limits = zip_limits or ZipLimits()
         self.root = Path(root).expanduser().resolve()
         self.objects = self.root / "objects"
         self.staging = self.root / "staging"
@@ -290,7 +294,7 @@ class Vault:
             sha256 = digest.hexdigest()
             media_type = detect_media_type(snapshot, expected.get("filename") or source.name)
             integrity, identity, evidence = "verified", "not_required", {}
-            members = None
+            members, archive_limits = None, None
             if not count:
                 issues.append("empty_file")
             if expected.get("sha256") and expected["sha256"].lower() != sha256:
@@ -332,8 +336,9 @@ class Vault:
                 except Exception as exc:
                     issues.append("invalid_pdf:" + type(exc).__name__)
             elif media_type == "application/zip" or "officedocument" in media_type:
+                archive_limits = asdict(self.zip_limits)
                 try:
-                    members = inspect_zip(snapshot)
+                    members = inspect_zip(snapshot, self.zip_limits)
                 except (UnsafeArchive, zipfile.BadZipFile, RuntimeError, OSError) as exc:
                     issues.append("unsafe_or_invalid_zip:" + str(exc))
             elif expected.get("require_identity") or expected.get("doi") or expected.get("title"):
@@ -356,6 +361,8 @@ class Vault:
             for key in ("role", "version", "resource_id", "source_url"):
                 if key in expected:
                     result[key] = expected[key]
+            if archive_limits is not None:
+                result["archive_limits"] = archive_limits
             if members is not None:
                 result["members"] = members
             return result
@@ -365,6 +372,6 @@ class Vault:
     def extract_zip(self, path: str | Path, *, parent_sha256: str | None = None, limits: ZipLimits | None = None):
         parent_sha256 = parent_sha256 or sha256_file(path)
         with tempfile.TemporaryDirectory(prefix="archive-", dir=self.staging) as directory:
-            members = safe_extract_zip(path, directory, limits)
+            members = safe_extract_zip(path, directory, limits or self.zip_limits)
             return [{**self.commit_file(member["path"], {"role": "supplement_member", "filename": member["name"]}),
                      "parent_sha256": parent_sha256, "member_name": member["name"]} for member in members]

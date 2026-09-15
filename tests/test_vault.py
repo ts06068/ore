@@ -245,3 +245,59 @@ def test_explicit_format_expectation_for_extensionless_endpoint(tmp_path):
     result = Vault(tmp_path / "vault").commit_file(source, {"role": "supplement", "filename": "supplementaryFiles", "media_type": "application/zip"})
     assert result["status"] == "invalid"
     assert "expected_zip_received_application/xml" in result["issues"]
+
+
+def test_trusted_archive_member_limits_preserve_total_bound_and_original_bytes(tmp_path):
+    archive = tmp_path / 'videos.zip'
+    payloads = {'movie1.avi': b'a' * 96, 'movie2.avi': b'b' * 96}
+    with zipfile.ZipFile(archive, 'w') as output:
+        for name, payload in payloads.items():output.writestr(name, payload)
+    original = archive.read_bytes()
+    restricted = Vault(tmp_path / 'restricted', zip_limits=ZipLimits(max_member_bytes=64, max_total_bytes=256))
+    result = restricted.commit_file(archive, {'role': 'supplement', 'zip_limits': {'max_member_bytes': 999_999}})
+    assert result['status'] == 'invalid'
+    assert result['issues'] == ['unsafe_or_invalid_zip:archive expanded member size exceeds limit (96 > 64)']
+    assert result['archive_limits']['max_member_bytes'] == 64
+    with pytest.raises(UnsafeArchive, match='member size'):
+        restricted.extract_zip(archive)
+    sufficient = Vault(tmp_path / 'sufficient', zip_limits=ZipLimits(max_member_bytes=96, max_total_bytes=192))
+    verified = sufficient.commit_file(archive, {'role': 'supplement'})
+    assert verified['status'] == 'verified' and verified['sha256'] == hashlib.sha256(original).hexdigest()
+    assert {item['name']: item['sha256'] for item in verified['members']} == {
+        name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
+    assert sum(item['bytes'] for item in verified['members']) == 192
+    assert verified['archive_limits']['max_member_bytes'] == 96
+    assert verified['archive_limits']['max_total_bytes'] == 192
+    total_limited = Vault(tmp_path / 'total', zip_limits=ZipLimits(max_member_bytes=128, max_total_bytes=191))
+    rejected = total_limited.commit_file(archive, {'role': 'supplement'})
+    assert rejected['status'] == 'invalid'
+    assert rejected['issues'] == ['unsafe_or_invalid_zip:archive expanded total size exceeds limit (192 > 191)']
+    assert archive.read_bytes() == original
+
+
+def test_archive_default_accepts_large_members_with_unchanged_aggregate_bound(tmp_path):
+    limits = Vault(tmp_path / 'vault').zip_limits
+    assert limits.max_member_bytes == 512 * 1024 * 1024
+    assert limits.max_total_bytes == 1024 * 1024 * 1024
+    assert limits.max_ratio == 1000 and limits.max_members == 10_000 and limits.max_depth == 20
+
+
+@pytest.mark.parametrize('failure', ['crc', 'path', 'ratio', 'count'])
+def test_custom_member_limit_does_not_disable_other_archive_checks(tmp_path, failure):
+    archive = tmp_path / 'supp.zip'
+    name = '../movie.avi' if failure == 'path' else 'movie.avi'
+    payload = b'unchanged CRC fixture' if failure == 'crc' else b'x' * 100
+    compression = zipfile.ZIP_DEFLATED if failure == 'ratio' else zipfile.ZIP_STORED
+    with zipfile.ZipFile(archive, 'w', compression) as output:
+        output.writestr(name, payload)
+        if failure == 'count':output.writestr('second.avi', 'second')
+    if failure == 'crc':
+        data = archive.read_bytes()
+        assert data.count(payload) == 1
+        archive.write_bytes(data.replace(payload, b'X' + payload[1:], 1))
+    limits = ZipLimits(max_member_bytes=512, max_total_bytes=1024, max_ratio=2, max_members=1)
+    result = Vault(tmp_path / 'vault', zip_limits=limits).commit_file(archive, {'role': 'supplement'})
+    assert result['status'] == 'invalid'
+    reason = {'crc': 'CRC', 'path': 'escapes', 'ratio': 'ratio', 'count': 'count'}[failure]
+    assert any(reason in issue for issue in result['issues'])
+    assert 'members' not in result
